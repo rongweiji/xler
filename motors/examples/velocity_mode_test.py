@@ -1,15 +1,21 @@
 #!/usr/bin/env python
-# test_lerobot_velocity.py
-# Test servos using lerobot motors library in velocity mode
-# Run servos one-by-one with same speed, torque, and duration
+"""
+Velocity Mode Test for STS3215 Servos
+
+Test servos using lerobot motors library in velocity mode.
+Runs servos one-by-one with same speed, torque, and duration.
+
+Example:
+    python velocity_mode_test.py --port COM3 --motor-ids 1 2 3 --velocity 600
+"""
 
 import argparse
 import sys
 import time
 from pathlib import Path
 
-# Add parent directory to path so we can import motors as a package
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add parent directory to path so we can import motors package
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from motors.motors_bus import Motor, MotorNormMode
 from motors.feetech import FeetechMotorsBus, OperatingMode

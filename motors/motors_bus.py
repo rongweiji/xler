@@ -32,8 +32,7 @@ import serial
 from deepdiff import DeepDiff
 from tqdm import tqdm
 
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-from lerobot.utils.utils import enter_pressed, move_cursor_up
+from .utils import DeviceAlreadyConnectedError, DeviceNotConnectedError, enter_pressed, move_cursor_up
 
 NameOrID: TypeAlias = str | int
 Value: TypeAlias = int | float
