@@ -130,11 +130,20 @@ pip install feetech-servo-sdk pyserial deepdiff
 
 For PS5 controller support with keyboard control example:
 
+**macOS:**
+```bash
+pip install pydualsense hidapi
+```
+
+**Windows/Linux:**
 ```bash
 pip install pydualsense
 ```
 
-**Note:** If you don't have a DualSense controller, the keyboard control will still work perfectly without this package.
+**Note:**
+- macOS requires `hidapi` for USB HID device access
+- If you don't have a DualSense controller, the keyboard control will still work perfectly without these packages
+- Controller can connect via USB or Bluetooth on all platforms
 
 ### 3. Verify Installation
 

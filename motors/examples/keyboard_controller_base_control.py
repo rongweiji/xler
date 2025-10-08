@@ -281,12 +281,12 @@ def calculate_motor_velocities(command, speed):
     """
     velocities = {"left": 0, "right": 0, "back": 0}
 
-    if command == 'w':  # Forward
+    if command == 'q':  # rotate left(CCW)
         velocities["left"] = speed
         velocities["right"] = speed
         velocities["back"] = 0
 
-    elif command == 's':  # Back
+    elif command == 'e':  # rotate right(CW)
         velocities["left"] = -speed
         velocities["right"] = -speed
         velocities["back"] = 0
@@ -301,12 +301,12 @@ def calculate_motor_velocities(command, speed):
         velocities["right"] = 0
         velocities["back"] = -speed
 
-    elif command == 'q':  # Rotate left (CCW)
+    elif command == 'w':  # forward
         velocities["left"] = -speed
         velocities["right"] = speed
         velocities["back"] = 0
 
-    elif command == 'e':  # Rotate right (CW)
+    elif command == 's':  # backward
         velocities["left"] = speed
         velocities["right"] = -speed
         velocities["back"] = 0
