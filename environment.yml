@@ -1,0 +1,11 @@
+name: xler
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - pip
+  - pip:
+    - pyserial>=3.5
+    - deepdiff>=6.0.0
+    - tqdm>=4.65.0
