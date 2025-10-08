@@ -25,13 +25,18 @@ DualSense Controller (PS5):
     Right Stick (RX)   - Rotate Left/Right
 
 Example:
-    python keyboard_controller_base_control.py --port COM3
-    python keyboard_controller_base_control.py --port COM3 --speed 400
+    # Auto-detect serial port
+    python keyboard_controller_base_control.py --speed 400
+
+    # Or manually specify port
+    python keyboard_controller_base_control.py --port /dev/cu.usbserial-XXXXX --speed 400
 """
 
 import argparse
 import sys
 import time
+import glob
+import platform
 from pathlib import Path
 
 # Add parent directory to path
@@ -56,6 +61,27 @@ MOTOR_ROLES = {
     "back": 3,    # Motor ID 3
 }
 
+
+# Terminal settings cache for Unix systems
+_terminal_settings = None
+_terminal_fd = None
+
+def setup_terminal():
+    """Setup terminal for raw input (Unix/Mac only)"""
+    global _terminal_settings, _terminal_fd
+    if sys.platform != 'win32':
+        import tty
+        import termios
+        _terminal_fd = sys.stdin.fileno()
+        _terminal_settings = termios.tcgetattr(_terminal_fd)
+        tty.setraw(_terminal_fd)
+
+def restore_terminal():
+    """Restore terminal to normal mode (Unix/Mac only)"""
+    global _terminal_settings, _terminal_fd
+    if sys.platform != 'win32' and _terminal_settings is not None:
+        import termios
+        termios.tcsetattr(_terminal_fd, termios.TCSADRAIN, _terminal_settings)
 
 def get_key_non_blocking():
     """
@@ -87,32 +113,24 @@ def get_key_non_blocking():
     else:
         # Linux/Mac: use select for non-blocking input
         import select
-        import tty
-        import termios
 
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
+        last_key = None
 
-        try:
-            tty.setraw(fd)
-
-            last_key = None
-
-            # Clear entire buffer
-            while True:
-                rlist, _, _ = select.select([sys.stdin], [], [], 0)
-                if rlist:
-                    ch = sys.stdin.read(1)
-                    if ord(ch) == 27:  # ESC
-                        last_key = 'esc'
-                    else:
-                        last_key = ch.lower()
+        # Clear entire buffer
+        while True:
+            rlist, _, _ = select.select([sys.stdin], [], [], 0)
+            if rlist:
+                ch = sys.stdin.read(1)
+                if ord(ch) == 27:  # ESC
+                    last_key = 'esc'
+                elif ch == ' ':  # SPACE
+                    last_key = ' '
                 else:
-                    break
+                    last_key = ch.lower()
+            else:
+                break
 
-            return last_key
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return last_key
 
 
 def init_controller():
@@ -369,14 +387,71 @@ def print_controls(has_controller):
     print("="*60 + "\n")
 
 
+def find_serial_port():
+    """
+    Automatically detect the serial port for USB-to-Serial adapter.
+
+    Returns:
+        str: The detected port path, or None if not found
+    """
+    system = platform.system()
+
+    if system == "Darwin":  # macOS
+        # Common patterns for USB serial adapters on macOS
+        patterns = [
+            "/dev/cu.usbserial*",
+            "/dev/cu.SLAB_USBtoUART*",
+            "/dev/cu.wchusbserial*",
+            "/dev/cu.usbmodem*",
+        ]
+        for pattern in patterns:
+            ports = glob.glob(pattern)
+            if ports:
+                return ports[0]  # Return first match
+
+    elif system == "Linux":
+        # Common patterns for USB serial adapters on Linux
+        patterns = [
+            "/dev/ttyUSB*",
+            "/dev/ttyACM*",
+        ]
+        for pattern in patterns:
+            ports = glob.glob(pattern)
+            if ports:
+                return ports[0]
+
+    elif system == "Windows":
+        # On Windows, try common COM ports
+        import serial.tools.list_ports
+        ports = list(serial.tools.list_ports.comports())
+        if ports:
+            return ports[0].device
+
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Keyboard control for 3-wheel omnidirectional base")
-    parser.add_argument("--port", type=str, default="COM3", help="Serial port")
+    parser.add_argument("--port", type=str, default=None, help="Serial port (auto-detected if not specified)")
     parser.add_argument("--speed", type=int, default=400, help="Base movement speed (0-1023)")
     parser.add_argument("--motor-left", type=int, default=1, help="Left motor ID (default: 1)")
     parser.add_argument("--motor-right", type=int, default=2, help="Right motor ID (default: 2)")
     parser.add_argument("--motor-back", type=int, default=3, help="Back motor ID (default: 3)")
     args = parser.parse_args()
+
+    # Auto-detect port if not specified
+    if args.port is None:
+        print("[init] Auto-detecting serial port...")
+        args.port = find_serial_port()
+        if args.port is None:
+            print("❌ Error: Could not auto-detect serial port.")
+            print("   Please connect your USB-to-Serial adapter and try again.")
+            print("   Or manually specify the port with --port option.")
+            print("\n   On macOS, check available ports with: ls /dev/cu.*")
+            print("   On Linux, check: ls /dev/ttyUSB*")
+            print("   On Windows, use: COM3, COM4, etc.")
+            return
+        print(f"✅ Found serial port: {args.port}")
 
     # Update motor role mapping if custom IDs provided
     MOTOR_ROLES["left"] = args.motor_left
@@ -410,8 +485,13 @@ def main():
         protocol_version=0
     )
 
+    # Setup terminal for keyboard input (macOS/Linux)
+    setup_terminal()
+
+    connected = False
     try:
         bus.connect()
+        connected = True
         setup_motors(bus)
         print_controls(controller is not None)
 
@@ -504,30 +584,44 @@ def main():
             # Sleep to maintain control frequency (20Hz)
             time.sleep(loop_delay)
 
+    except ConnectionError as e:
+        print(f"\n❌ Connection Failed: Could not connect to motors on {args.port}")
+        print(f"   Make sure:")
+        print(f"   • Motors are powered on")
+        print(f"   • USB cable is connected")
+        print(f"   • Port is correct (on macOS, try: ls /dev/tty.* | grep usb)")
+        print(f"\n   Hint: COM3 is a Windows port. On macOS, use /dev/tty.usbserial-* or similar")
+        return
+
     except KeyboardInterrupt:
         print("\n\n[interrupt] Ctrl+C detected, stopping motors...")
 
     except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n❌ Unexpected Error: {e}")
 
     finally:
-        print("\n[cleanup] Stopping all motors...")
-        try:
-            stop_all_motors(bus)
-            bus.disable_torque()
-            time.sleep(0.1)
+        # Restore terminal settings
+        restore_terminal()
 
-            # Reset to position mode
-            for role, motor_id in MOTOR_ROLES.items():
-                motor_name = f"motor_{motor_id}"
-                bus.write("Operating_Mode", motor_name, OperatingMode.POSITION.value)
-                time.sleep(0.05)
-        except:
-            pass
+        if connected:
+            print("\n[cleanup] Stopping all motors...")
+            try:
+                stop_all_motors(bus)
+                bus.disable_torque()
+                time.sleep(0.1)
 
-        bus.disconnect()
+                # Reset to position mode
+                for role, motor_id in MOTOR_ROLES.items():
+                    motor_name = f"motor_{motor_id}"
+                    bus.write("Operating_Mode", motor_name, OperatingMode.POSITION.value)
+                    time.sleep(0.05)
+            except:
+                pass
+
+            try:
+                bus.disconnect()
+            except:
+                pass
 
         # Close controller if connected
         if controller is not None:

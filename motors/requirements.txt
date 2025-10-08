@@ -1,0 +1,9 @@
+# Core dependencies for Feetech motor control
+feetech-servo-sdk>=1.0.0
+pyserial>=3.5
+deepdiff>=6.0.0
+pydualsense
+
+# Optional: DualSense PS5 controller support
+# Uncomment if you want to use controller features
+# pydualsense>=0.7.0
