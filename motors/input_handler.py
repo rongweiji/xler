@@ -26,11 +26,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 # Try to import DualSense controller
-try:
-    from pydualsense import pydualsense
-    DUALSENSE_AVAILABLE = True
-except ImportError:
-    DUALSENSE_AVAILABLE = False
+from pydualsense import pydualsense
 
 
 @dataclass
@@ -64,7 +60,7 @@ class KeyboardHandler:
                 import termios
                 self._terminal_fd = sys.stdin.fileno()
                 self._terminal_settings = termios.tcgetattr(self._terminal_fd)
-                tty.setraw(self._terminal_fd)
+                tty.setcbreak(self._terminal_fd)
             except:
                 pass
 
@@ -123,12 +119,13 @@ class KeyboardHandler:
             rlist, _, _ = select.select([sys.stdin], [], [], 0)
             if rlist:
                 ch = sys.stdin.read(1)
-                if ord(ch) == 27:  # ESC
-                    last_key = 'esc'
-                elif ch == ' ':  # SPACE
-                    last_key = ' '
-                else:
-                    last_key = ch.lower()
+                if ch and len(ch) > 0:  # Check if we got a character
+                    if ord(ch) == 27:  # ESC
+                        last_key = 'esc'
+                    elif ch == ' ':  # SPACE
+                        last_key = ' '
+                    else:
+                        last_key = ch.lower()
             else:
                 break
 
@@ -157,9 +154,6 @@ class DualSenseHandler:
         self.deadzone = deadzone
         self.connected = False
 
-        if not DUALSENSE_AVAILABLE:
-            print("⚠️  pydualsense not installed. Controller support disabled.")
-            return
 
         if auto_calibrate:
             self._init_and_calibrate()
@@ -180,7 +174,7 @@ class DualSenseHandler:
                 pass
 
             # Calibrate joysticks
-            print("\n[Calibration] Please release all joysticks to center position...")
+            print("[Calibration] Please release all joysticks to center position...")
             print("[Calibration] Calibrating in 2 seconds...")
             time.sleep(2)
 
@@ -426,3 +420,178 @@ class CombinedInputHandler:
 
         if self.dualsense_handler:
             self.dualsense_handler.close()
+
+    def get_controller_joystick_info(self) -> dict:
+        """
+        Get DualSense controller joystick information focused on 6 movement directions.
+        
+        Returns:
+            Dict with joystick values and movement directions
+        """
+        if not self.dualsense_handler or not self.dualsense_handler.connected:
+            return {}
+        
+        try:
+            raw_values = self.dualsense_handler.get_raw_values()
+            forward, strafe, rotate = self.dualsense_handler.read()
+            
+            return {
+                # Raw joystick values (0-255, centered at 128)
+                'raw': {
+                    'left_x': raw_values['LX'],
+                    'left_y': raw_values['LY'],
+                    'right_x': raw_values['RX'],
+                    'right_y': raw_values['RY'],
+                },
+                # Normalized movement values (-1.0 to 1.0)
+                'movement': {
+                    'forward': forward,
+                    'strafe': strafe,
+                    'rotate': rotate,
+                },
+                # Movement directions (boolean flags)
+                'directions': {
+                    'forward': forward > 0.1,
+                    'backward': forward < -0.1,
+                    'strafe_left': strafe < -0.1,
+                    'strafe_right': strafe > 0.1,
+                    'rotate_left': rotate < -0.1,
+                    'rotate_right': rotate > 0.1,
+                }
+            }
+        except Exception as e:
+            return {'error': str(e)}
+
+
+def main():
+    """
+    Test function for input_handler.py
+    Run this file directly to test keyboard and DualSense controller inputs.
+    """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Test input handler for keyboard and DualSense controller")
+    parser.add_argument("--keyboard-only", action="store_true", help="Test keyboard input only")
+    parser.add_argument("--controller-only", action="store_true", help="Test DualSense controller only")
+    parser.add_argument("--show-joysticks", action="store_true", help="Show detailed joystick raw values")
+    args = parser.parse_args()
+    
+    # Determine what to test
+    enable_keyboard = not args.controller_only
+    enable_dualsense = not args.keyboard_only
+    
+    print("=" * 80)
+    print("🎮 INPUT HANDLER TEST")
+    print("=" * 80)
+    print()
+    
+    if enable_keyboard:
+        print("⌨️  Keyboard Controls:")
+        print("  W - Forward        S - Backward")
+        print("  A - Strafe Left    D - Strafe Right") 
+        print("  Q - Rotate Left    E - Rotate Right")
+        print("  SPACE - Stop       ESC - Exit")
+        print()
+    
+    if enable_dualsense:
+        print("🎮 DualSense Controller:")
+        print("  Left Stick (LX/LY) - Forward/Back + Strafe Left/Right")
+        print("  Right Stick (RX)   - Rotate Left/Right")
+        if args.show_joysticks:
+            print("  Raw joystick values (0-255) will be displayed")
+        print()
+    
+    print("Press ESC to exit the test")
+    print("=" * 80)
+    print()
+    
+    # Create input handler
+    print("Initializing input handler...")
+    handler = CombinedInputHandler(
+        enable_keyboard=enable_keyboard,
+        enable_dualsense=enable_dualsense
+    )
+    print("Input handler initialized.")
+    
+    # Check controller connection
+    if enable_dualsense:
+        if handler.has_controller():
+            print("✅ DualSense controller connected!")
+        else:
+            print("❌ DualSense controller not connected")
+            if not enable_keyboard:
+                print("   Exiting since controller-only mode was requested")
+                return
+        print()
+    
+    # Add a clear separator before the main loop
+    print("=" * 60)
+    print("Starting input test...")
+    print("=" * 60)
+    
+    # Test loop
+    try:
+        loop_count = 0
+        last_state = None
+        
+        while True:
+            loop_count += 1
+            state = handler.read()
+            
+            # Check for exit
+            if state.exit_requested:
+                print("👋 Exiting test...")
+                break
+            
+            # Only print when state changes or every 30 cycles
+            state_changed = (state.forward != 0 or state.strafe != 0 or state.rotate != 0 or 
+                           state.keyboard_key is not None or state.controller_active)
+            
+            if state_changed or loop_count % 30 == 0:
+                # Build movement info
+                movements = []
+                if abs(state.forward) > 0.1:
+                    movements.append(f"FWD:{state.forward:+.2f}" if state.forward > 0 else f"BWD:{abs(state.forward):.2f}")
+                if abs(state.strafe) > 0.1:
+                    movements.append(f"L:{abs(state.strafe):.2f}" if state.strafe < 0 else f"R:{state.strafe:.2f}")
+                if abs(state.rotate) > 0.1:
+                    movements.append(f"RL:{abs(state.rotate):.2f}" if state.rotate < 0 else f"RR:{state.rotate:.2f}")
+                
+                movement_str = ' | '.join(movements) if movements else 'None'
+                
+                # Build input source info
+                sources = []
+                if state.keyboard_key:
+                    key_display = state.keyboard_key.upper() if state.keyboard_key != ' ' else 'SPACE'
+                    sources.append(f"⌨️{key_display}")
+                if state.controller_active:
+                    sources.append("🎮")
+                
+                input_str = ' | '.join(sources) if sources else 'None'
+                
+                # Print single line with all info
+                print(f"[{loop_count:4d}] Movement: {movement_str:<25} | Input: {input_str}")
+                
+                # Show detailed controller joystick info if requested (separate line)
+                if args.show_joysticks and handler.has_controller():
+                    joystick_info = handler.get_controller_joystick_info()
+                    if 'error' not in joystick_info:
+                        raw = joystick_info['raw']
+                        print(f"      Controller: L({raw['left_x']:3d},{raw['left_y']:3d}) R({raw['right_x']:3d},{raw['right_y']:3d})")
+                    else:
+                        print(f"      ❌ Controller error: {joystick_info['error']}")
+            
+            # Small delay to prevent excessive CPU usage
+            time.sleep(0.05)
+            
+    except KeyboardInterrupt:
+        print("👋 Test interrupted by user")
+    
+    finally:
+        # Cleanup
+        handler.close()
+        print("✅ Input handler closed")
+
+
+if __name__ == "__main__":
+    main()

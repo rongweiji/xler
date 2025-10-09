@@ -158,7 +158,7 @@ def main():
     speed = args.speed if args.speed is not None else motor_settings['default_speed']
 
     # Debug: Show speed being used
-    print(f"\n[config] Using speed: {speed} (max_velocity: {motor_settings['max_velocity']})")
+    print(f"[config] Using speed: {speed} (max_velocity: {motor_settings['max_velocity']})")
     print(f"[config] Speed multiplier will be: {speed / motor_settings['max_velocity']:.4f}")
     print(f"[config] Expected motor velocity: ~{int(speed)} when input is 1.0")
 
@@ -171,7 +171,8 @@ def main():
             print("❌ Error: Could not auto-detect serial port.")
             print("   Please connect your USB-to-Serial adapter and try again.")
             print("   Or manually specify the port with --port option or in motors/config.yaml")
-            print("\n   On macOS, check available ports with: ls /dev/cu.*")
+            print()
+            print("   On macOS, check available ports with: ls /dev/cu.*")
             print("   On Linux, check: ls /dev/ttyUSB*")
             print("   On Windows, use: COM3, COM4, etc.")
             return
@@ -190,7 +191,8 @@ def main():
         )
 
     # Initialize input handler
-    print("\n[init] Checking for DualSense controller...")
+    print()
+    print("[init] Checking for DualSense controller...")
     input_handler = CombinedInputHandler(enable_keyboard=True, enable_dualsense=True)
 
     if input_handler.has_controller():
@@ -199,7 +201,8 @@ def main():
         print("⌨️  Input Mode: Keyboard Only")
 
     # Connect to bus
-    print(f"\n[init] Connecting to motors on {port}...")
+    print()
+    print(f"[init] Connecting to motors on {port}...")
     bus = FeetechMotorsBus(
         port=port,
         motors=motors,
@@ -224,19 +227,19 @@ def main():
         # Print controls
         print_controls(input_handler.has_controller())
 
-        sys.stdout.write("Ready! Press and HOLD keys to control (release to stop)...\r\n\r\n")
-        sys.stdout.write(f"ℹ️  Control runs at {control_config['frequency']}Hz - motors stop immediately when controls released\r\n")
-        sys.stdout.write(f"📊 Command stream display: Shows every {control_config['print_interval']} cycles\r\n\r\n")
-        sys.stdout.flush()
+        print("Ready! Press and HOLD keys to control (release to stop)...")
+        print()
+        print(f"ℹ️  Control runs at {control_config['frequency']}Hz - motors stop immediately when controls released")
+        print(f"📊 Command stream display: Shows every {control_config['print_interval']} cycles")
+        print()
 
         loop_counter = 0
         control_frequency = control_config['frequency']
         loop_delay = 1.0 / control_frequency
         print_interval = control_config['print_interval']
 
-        sys.stdout.write(f"{'Cycle':<6} {'Input':<15} {'Fwd':<6} {'Str':<6} {'Rot':<6} {'Left':<6} {'Right':<6} {'Back':<6}\r\n")
-        sys.stdout.write("-" * 75 + "\r\n")
-        sys.stdout.flush()
+        print(f"{'Cycle':<6} {'Input':<15} {'Fwd':<6} {'Str':<6} {'Rot':<6} {'Left':<6} {'Right':<6} {'Back':<6}")
+        print("-" * 75)
 
         while True:
             loop_counter += 1
@@ -260,10 +263,10 @@ def main():
 
             # DEBUG: Print actual values on first movement
             if loop_counter == 1 and (abs(state.forward) > 0 or abs(state.strafe) > 0 or abs(state.rotate) > 0):
-                sys.stdout.write(f"\r\n[DEBUG] Input: fwd={state.forward:.2f}, strafe={state.strafe:.2f}, rot={state.rotate:.2f}\r\n")
-                sys.stdout.write(f"[DEBUG] Speed parameter: {speed}\r\n")
-                sys.stdout.write(f"[DEBUG] Motor velocities: left={velocities['left']}, right={velocities['right']}, back={velocities['back']}\r\n")
-                sys.stdout.flush()
+                print()
+                print(f"[DEBUG] Input: fwd={state.forward:.2f}, strafe={state.strafe:.2f}, rot={state.rotate:.2f}")
+                print(f"[DEBUG] Speed parameter: {speed}")
+                print(f"[DEBUG] Motor velocities: left={velocities['left']}, right={velocities['right']}, back={velocities['back']}")
 
             # Print command stream at regular intervals
             if loop_counter % print_interval == 0:
@@ -280,37 +283,40 @@ def main():
                 else:
                     input_display = "none"
 
-                # Use \r\n for proper line breaks in raw terminal mode
-                output = (f"{loop_counter:<6d} {input_display:<15} "
-                         f"{state.forward:+.2f}  {state.strafe:+.2f}  {state.rotate:+.2f}  "
-                         f"{velocities['left']:+6d} {velocities['right']:+6d} {velocities['back']:+6d}\r\n")
-                sys.stdout.write(output)
-                sys.stdout.flush()
+                # Print formatted output
+                print(f"{loop_counter:<6d} {input_display:<15} "
+                      f"{state.forward:+.2f}  {state.strafe:+.2f}  {state.rotate:+.2f}  "
+                      f"{velocities['left']:+6d} {velocities['right']:+6d} {velocities['back']:+6d}")
 
             # Sleep to maintain control frequency
             time.sleep(loop_delay)
 
     except ConnectionError as e:
-        print(f"\n❌ Connection Failed: Could not connect to motors on {port}")
-        print(f"   Make sure:")
-        print(f"   • Motors are powered on")
-        print(f"   • USB cable is connected")
-        print(f"   • Port is correct (on macOS, try: ls /dev/tty.* | grep usb)")
-        print(f"\n   Hint: COM3 is a Windows port. On macOS, use /dev/tty.usbserial-* or similar")
+        print()
+        print(f"❌ Connection Failed: Could not connect to motors on {port}")
+        print("   Make sure:")
+        print("   • Motors are powered on")
+        print("   • USB cable is connected")
+        print("   • Port is correct (on macOS, try: ls /dev/tty.* | grep usb)")
+        print()
+        print("   Hint: COM3 is a Windows port. On macOS, use /dev/tty.usbserial-* or similar")
         return
 
     except KeyboardInterrupt:
-        print("\n\n[interrupt] Ctrl+C detected, stopping motors...")
+        print()
+        print("[interrupt] Ctrl+C detected, stopping motors...")
 
     except Exception as e:
-        print(f"\n❌ Unexpected Error: {e}")
+        print()
+        print(f"❌ Unexpected Error: {e}")
         import traceback
         traceback.print_exc()
 
     finally:
         # Cleanup
         if connected:
-            print("\n[cleanup] Stopping all motors...")
+            print()
+            print("[cleanup] Stopping all motors...")
             try:
                 controller.stop()
                 controller.reset_to_position_mode()
