@@ -1,0 +1,35 @@
+# Motor Configuration for 3-Wheel Omnidirectional Base
+#
+# This configuration file defines motor IDs and settings for your robot base.
+# Edit these values to match your specific motor setup.
+#
+# Motor ID Assignment:
+#   - left: ID of the left wheel motor
+#   - right: ID of the right wheel motor
+#   - back: ID of the back wheel motor
+#
+# Note: Motor IDs must match the physical motor IDs configured on your servos.
+
+# Motor ID mapping for 3-wheel omnidirectional base
+motor_ids:
+  left: 1
+  right: 2
+  back: 3
+
+# Motor settings
+motor_settings:
+  model: "sts3215"              # Feetech motor model
+  max_velocity: 1023            # Maximum velocity (0-1023)
+  torque_limit: 700             # Torque limit (0-1023)
+  default_speed: 1000            # Default movement speed (0-1023) - increase this if robot moves too slow
+
+# Serial communication settings
+serial:
+  port: null                    # Serial port (null = auto-detect)
+  baudrate: 1000000             # Baud rate for serial communication
+  protocol_version: 0           # Feetech protocol version
+
+# Control settings
+control:
+  frequency: 20                 # Control loop frequency in Hz
+  print_interval: 5             # Print debug info every N cycles

@@ -104,6 +104,10 @@ motors/
 ├── motors_bus.py          # Base motor bus abstract class
 ├── encoding_utils.py      # Encoding utilities (sign-magnitude)
 ├── utils.py              # Utility functions and error classes
+├── input_handler.py      # Input handling (keyboard + DualSense)
+├── movement_controller.py # High-level movement control
+├── config_loader.py      # Configuration management
+├── config.yaml          # Motor configuration file
 ├── __init__.py           # Package exports
 ├── feetech/              # Feetech-specific implementation
 │   ├── feetech.py        # FeetechMotorsBus implementation
@@ -116,6 +120,526 @@ motors/
 │   ├── keyboard_controller_base_control.py # Keyboard + DualSense control
 │   └── test_base_movements.py              # Test base movements
 └── README.md            # This file
+```
+
+## Code File Descriptions
+
+### Core Motor Control Files
+
+#### `motors_bus.py` - Base Motor Bus Abstract Class
+**Purpose**: Abstract base class defining the interface for all motor bus implementations.
+
+**Key Features**:
+- Defines common motor operations (connect, disconnect, read, write, sync operations)
+- Handles motor validation and calibration
+- Provides normalization/denormalization for user-friendly values
+- Supports both individual and bulk motor operations
+- Implements error handling and retry mechanisms
+
+**Main Classes**:
+- `MotorsBus`: Abstract base class for all motor bus implementations
+- `Motor`: Data class for motor configuration
+- `MotorCalibration`: Data class for motor calibration parameters
+- `MotorNormMode`: Enum for normalization modes (degrees, range_0_100, range_m100_100)
+
+**Usage**: This is the foundation that `FeetechMotorsBus` inherits from. You typically don't use this directly.
+
+#### `feetech/feetech.py` - Feetech Motor Implementation
+**Purpose**: Concrete implementation of `MotorsBus` for Feetech STS3215 servos.
+
+**Key Features**:
+- Implements all abstract methods from `MotorsBus`
+- Handles Feetech-specific protocol communication
+- Supports both Protocol 0 and Protocol 1
+- Manages sign-magnitude encoding for velocity values
+- Provides motor configuration and calibration
+- Implements broadcast ping for motor discovery
+
+**Main Classes**:
+- `FeetechMotorsBus`: Main class for controlling Feetech motors
+- `OperatingMode`: Enum for motor operating modes (POSITION, VELOCITY, PWM, STEP)
+- `DriveMode`: Enum for drive modes (NON_INVERTED, INVERTED)
+- `TorqueMode`: Enum for torque control (ENABLED, DISABLED)
+
+**Usage**: This is the main class you'll use to control your Feetech motors.
+
+#### `feetech/tables.py` - Motor Control Tables
+**Purpose**: Defines register addresses, baud rates, and encoding information for different Feetech motor models.
+
+**Key Features**:
+- Control table mappings for STS and SCS series motors
+- Baud rate tables for different motor models
+- Sign-magnitude encoding bit positions
+- Model number mappings
+- Protocol version mappings
+
+**Usage**: This file is used internally by `FeetechMotorsBus` to know how to communicate with different motor models.
+
+#### `encoding_utils.py` - Data Encoding Utilities
+**Purpose**: Handles encoding and decoding of signed values for motor communication.
+
+**Key Features**:
+- Sign-magnitude encoding/decoding (used by Feetech motors)
+- Two's complement encoding/decoding
+- Proper handling of negative values for velocity commands
+
+**Usage**: Critical for correct motor control - without this, negative velocities would be interpreted incorrectly.
+
+#### `utils.py` - Utility Functions
+**Purpose**: Common utility functions and error classes used throughout the motor library.
+
+**Key Features**:
+- Error classes (`DeviceAlreadyConnectedError`, `DeviceNotConnectedError`)
+- Terminal utilities (`enter_pressed`, `move_cursor_up`)
+- Cross-platform compatibility
+
+**Usage**: Provides common utilities used by other modules.
+
+### High-Level Control Files
+
+#### `input_handler.py` - Input Handling System
+**Purpose**: Provides unified input handling for keyboard and DualSense controller.
+
+**Key Features**:
+- **KeyboardHandler**: Non-blocking keyboard input for Windows/macOS/Linux
+- **DualSenseHandler**: PS5 controller support with auto-calibration
+- **CombinedInputHandler**: Merges keyboard and controller inputs
+- **InputState**: Data class representing current input state
+
+**Main Classes**:
+- `InputState`: Represents current input (forward, strafe, rotate, exit_requested)
+- `KeyboardHandler`: Handles keyboard input with proper terminal setup
+- `DualSenseHandler`: PS5 controller with deadzone and calibration
+- `CombinedInputHandler`: Combines multiple input sources
+
+**Usage**: Use `CombinedInputHandler` for real-time control applications.
+
+#### `movement_controller.py` - Movement Control Abstraction
+**Purpose**: High-level controller for 3-wheel omnidirectional robot base.
+
+**Key Features**:
+- **OmniBaseController**: Handles 3-wheel omnidirectional kinematics
+- Converts high-level movement commands to motor velocities
+- Manages motor setup and mode switching
+- Provides stop and reset functionality
+
+**Main Classes**:
+- `OmniBaseController`: Main class for controlling omnidirectional base
+
+**Usage**: Use this for high-level robot movement control instead of directly controlling individual motors.
+
+#### `config_loader.py` - Configuration Management
+**Purpose**: Loads and manages motor configuration from YAML files with CLI override support.
+
+**Key Features**:
+- YAML configuration file loading
+- CLI argument override support
+- Configuration validation
+- Default configuration fallback
+- Pretty printing of configuration
+
+**Main Functions**:
+- `load_motor_config()`: Load config with optional overrides
+- `validate_motor_config()`: Validate configuration
+- `print_motor_config()`: Pretty print configuration
+- `save_motor_config()`: Save configuration to file
+
+**Usage**: Use this to manage motor configuration instead of hardcoding values.
+
+#### `config.yaml` - Motor Configuration File
+**Purpose**: YAML configuration file defining motor IDs, settings, and control parameters.
+
+**Key Sections**:
+- `motor_ids`: Motor ID mapping (left, right, back)
+- `motor_settings`: Motor parameters (model, max_velocity, torque_limit, default_speed)
+- `serial`: Serial communication settings (port, baudrate, protocol_version)
+- `control`: Control loop settings (frequency, print_interval)
+
+**Usage**: Edit this file to match your specific motor setup and preferences.
+
+### Example Scripts
+
+#### `examples/keyboard_controller_base_control.py` - Main Control Example
+**Purpose**: Complete example showing real-time robot control with keyboard and DualSense controller.
+
+**Key Features**:
+- 20Hz control loop for responsive operation
+- Keyboard control (WASD + QE for movement)
+- DualSense controller support with auto-calibration
+- Configuration loading with CLI overrides
+- Real-time status display
+- Proper cleanup and error handling
+
+**Usage**: This is the main example you'll run to control your robot.
+
+#### `examples/basic_position_control.py` - Position Control Example
+**Purpose**: Simple example showing basic position control of individual servos.
+
+**Usage**: Use this to test individual motor position control.
+
+#### `examples/velocity_mode_test.py` - Velocity Mode Testing
+**Purpose**: Test continuous rotation (velocity mode) for individual motors.
+
+**Usage**: Use this to test that your motors can run in velocity mode.
+
+#### `examples/scan_servos.py` - Motor Discovery
+**Purpose**: Scan for connected servos and display their information.
+
+**Usage**: Use this to find which motors are connected and their IDs.
+
+#### `examples/test_base_movements.py` - Movement Testing
+**Purpose**: Non-interactive test of all 6 basic movements (forward, back, left, right, rotate left, rotate right).
+
+**Usage**: Use this to test your robot's movement capabilities without manual control.
+
+## Implementation Guide
+
+This section provides step-by-step instructions on how to implement and use the motor control system components.
+
+### 1. Basic Motor Control Implementation
+
+#### Step 1: Import Required Modules
+```python
+from motors.motors_bus import Motor, MotorNormMode
+from motors.feetech import FeetechMotorsBus, OperatingMode
+```
+
+#### Step 2: Configure Motors
+```python
+# Define motor configuration
+motors = {
+    "motor_1": Motor(id=1, model="sts3215", norm_mode=MotorNormMode.DEGREES),
+    "motor_2": Motor(id=2, model="sts3215", norm_mode=MotorNormMode.DEGREES),
+    "motor_3": Motor(id=3, model="sts3215", norm_mode=MotorNormMode.DEGREES)
+}
+```
+
+#### Step 3: Initialize and Connect
+```python
+# Create motor bus
+bus = FeetechMotorsBus(
+    port="COM3",  # or "/dev/ttyUSB0" on Linux
+    motors=motors,
+    protocol_version=0
+)
+
+# Connect to motors
+bus.connect()
+```
+
+#### Step 4: Basic Operations
+```python
+# Enable torque
+bus.enable_torque()
+
+# Position control
+bus.write("Goal_Position", "motor_1", 512)  # Move to center
+position = bus.read("Present_Position", "motor_1")
+
+# Velocity control (switch to velocity mode first)
+bus.disable_torque()
+bus.write("Operating_Mode", "motor_1", OperatingMode.VELOCITY.value)
+bus.enable_torque()
+bus.write("Goal_Velocity", "motor_1", 600)  # Rotate at speed 600
+
+# Stop motor
+for _ in range(5):
+    bus.write("Goal_Velocity", "motor_1", 0)
+    time.sleep(0.02)
+
+# Cleanup
+bus.disable_torque()
+bus.disconnect()
+```
+
+### 2. High-Level Movement Control Implementation
+
+#### Step 1: Import Movement Controller
+```python
+from motors.movement_controller import OmniBaseController
+```
+
+#### Step 2: Initialize Controller
+```python
+# After setting up bus (see above)
+controller = OmniBaseController(
+    bus=bus,
+    motor_ids={"left": 1, "right": 2, "back": 3},
+    max_velocity=1023
+)
+```
+
+#### Step 3: Setup Motors for Movement
+```python
+# Configure all motors for velocity mode
+controller.setup_motors(torque_limit=700)
+```
+
+#### Step 4: Control Movement
+```python
+# Move the robot
+controller.move(forward=0.5, strafe=0.3, rotate=0.0, speed=400)
+
+# Stop all motors
+controller.stop()
+
+# Reset to position mode when done
+controller.reset_to_position_mode()
+```
+
+### 3. Input Handling Implementation
+
+#### Step 1: Import Input Handler
+```python
+from motors.input_handler import CombinedInputHandler
+```
+
+#### Step 2: Initialize Input Handler
+```python
+# Create input handler with both keyboard and controller
+handler = CombinedInputHandler(
+    enable_keyboard=True,
+    enable_dualsense=True
+)
+```
+
+#### Step 3: Read Inputs in Control Loop
+```python
+while True:
+    # Read current input state
+    state = handler.read()
+    
+    # Check for exit
+    if state.exit_requested:
+        break
+    
+    # Use input values
+    print(f"Forward: {state.forward}, Strafe: {state.strafe}, Rotate: {state.rotate}")
+    
+    # Debug info
+    print(handler.get_debug_string())
+    
+    time.sleep(0.05)  # 20Hz loop
+```
+
+#### Step 4: Cleanup
+```python
+handler.close()
+```
+
+### 4. Configuration Management Implementation
+
+#### Step 1: Import Config Loader
+```python
+from motors.config_loader import load_motor_config, print_motor_config
+```
+
+#### Step 2: Load Configuration
+```python
+# Load with defaults from config.yaml
+config = load_motor_config()
+
+# Override specific values
+config = load_motor_config(
+    motor_left=5,
+    speed=500,
+    port="/dev/ttyUSB0"
+)
+
+# Print configuration
+print_motor_config(config)
+```
+
+#### Step 3: Use Configuration
+```python
+# Access configuration values
+motor_ids = config['motor_ids']
+default_speed = config['motor_settings']['default_speed']
+port = config['serial']['port']
+
+# Create motors from config
+motors = {}
+for role, motor_id in motor_ids.items():
+    motor_name = f"motor_{motor_id}"
+    motors[motor_name] = Motor(
+        id=motor_id,
+        model=config['motor_settings']['model'],
+        norm_mode=MotorNormMode.DEGREES
+    )
+```
+
+### 5. Complete Implementation Example
+
+Here's a complete example combining all components:
+
+```python
+#!/usr/bin/env python
+"""
+Complete Motor Control Implementation Example
+"""
+
+import time
+from motors.motors_bus import Motor, MotorNormMode
+from motors.feetech import FeetechMotorsBus, OperatingMode
+from motors.movement_controller import OmniBaseController
+from motors.input_handler import CombinedInputHandler
+from motors.config_loader import load_motor_config
+
+def main():
+    # Load configuration
+    config = load_motor_config()
+    
+    # Create motor configuration
+    motors = {}
+    for role, motor_id in config['motor_ids'].items():
+        motor_name = f"motor_{motor_id}"
+        motors[motor_name] = Motor(
+            id=motor_id,
+            model=config['motor_settings']['model'],
+            norm_mode=MotorNormMode.DEGREES
+        )
+    
+    # Initialize motor bus
+    bus = FeetechMotorsBus(
+        port=config['serial']['port'],
+        motors=motors,
+        protocol_version=config['serial']['protocol_version']
+    )
+    
+    # Initialize movement controller
+    controller = OmniBaseController(
+        bus=bus,
+        motor_ids=config['motor_ids'],
+        max_velocity=config['motor_settings']['max_velocity']
+    )
+    
+    # Initialize input handler
+    handler = CombinedInputHandler(
+        enable_keyboard=True,
+        enable_dualsense=True
+    )
+    
+    try:
+        # Connect and setup
+        bus.connect()
+        controller.setup_motors(config['motor_settings']['torque_limit'])
+        
+        print("✅ Robot ready! Use WASD+QE keys or DualSense controller.")
+        print("Press ESC to exit.\n")
+        
+        # Main control loop
+        cycle_count = 0
+        while True:
+            # Read input
+            state = handler.read()
+            
+            if state.exit_requested:
+                break
+            
+            # Move robot based on input
+            controller.move(
+                forward=state.forward,
+                strafe=state.strafe,
+                rotate=state.rotate,
+                speed=config['motor_settings']['default_speed']
+            )
+            
+            # Print status periodically
+            cycle_count += 1
+            if cycle_count % config['control']['print_interval'] == 0:
+                print(f"Status: {handler.get_debug_string()}")
+            
+            # Control loop timing
+            time.sleep(1.0 / config['control']['frequency'])
+    
+    except KeyboardInterrupt:
+        print("\n🛑 Interrupted by user")
+    
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    finally:
+        # Cleanup
+        print("\n[cleanup] Stopping robot...")
+        try:
+            controller.stop()
+            controller.reset_to_position_mode()
+        except:
+            pass
+        
+        handler.close()
+        bus.disconnect()
+        print("✅ Cleanup complete.")
+
+if __name__ == "__main__":
+    main()
+```
+
+### 6. Error Handling Best Practices
+
+#### Always Use Try-Finally Blocks
+```python
+try:
+    bus.connect()
+    # Your motor operations here
+except Exception as e:
+    print(f"Error: {e}")
+finally:
+    # Always cleanup
+    try:
+        bus.disable_torque()
+    except:
+        pass
+    bus.disconnect()
+```
+
+#### Handle Motor Communication Errors
+```python
+# Read with retry
+try:
+    position = bus.read("Present_Position", "motor_1", num_retry=3)
+except ConnectionError as e:
+    print(f"Communication error: {e}")
+    # Handle error appropriately
+```
+
+#### Validate Configuration
+```python
+from motors.config_loader import validate_motor_config
+
+config = load_motor_config()
+if not validate_motor_config(config):
+    print("❌ Invalid configuration!")
+    exit(1)
+```
+
+### 7. Debugging and Troubleshooting
+
+#### Check Motor Connection
+```python
+# Scan for motors
+from motors.feetech import FeetechMotorsBus
+found = FeetechMotorsBus.scan_port("COM3")
+print(f"Found motors: {found}")
+```
+
+#### Read Motor Status
+```python
+# Read various motor parameters
+voltage = bus.read("Present_Voltage", "motor_1")
+temperature = bus.read("Present_Temperature", "motor_1")
+moving = bus.read("Moving", "motor_1")
+print(f"Voltage: {voltage}, Temp: {temperature}, Moving: {moving}")
+```
+
+#### Test Individual Motors
+```python
+# Test one motor at a time
+bus.write("Goal_Velocity", "motor_1", 300)
+time.sleep(2)
+bus.write("Goal_Velocity", "motor_1", 0)
 ```
 
 ## Installation

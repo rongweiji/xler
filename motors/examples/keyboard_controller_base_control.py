@@ -43,319 +43,50 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from motors.motors_bus import Motor, MotorNormMode
-from motors.feetech import FeetechMotorsBus, OperatingMode
-
-# Try to import DualSense controller
-try:
-    from pydualsense import pydualsense
-    DUALSENSE_AVAILABLE = True
-except ImportError:
-    DUALSENSE_AVAILABLE = False
-    print("⚠️  pydualsense not installed. Controller support disabled.")
+from motors.feetech import FeetechMotorsBus
+from motors.movement_controller import OmniBaseController
+from motors.input_handler import CombinedInputHandler
+from motors.config_loader import load_motor_config, print_motor_config, validate_motor_config
 
 
-# Motor role mapping
-MOTOR_ROLES = {
-    "left": 1,    # Motor ID 1
-    "right": 2,   # Motor ID 2
-    "back": 3,    # Motor ID 3
-}
-
-
-# Terminal settings cache for Unix systems
-_terminal_settings = None
-_terminal_fd = None
-
-def setup_terminal():
-    """Setup terminal for raw input (Unix/Mac only)"""
-    global _terminal_settings, _terminal_fd
-    if sys.platform != 'win32':
-        import tty
-        import termios
-        _terminal_fd = sys.stdin.fileno()
-        _terminal_settings = termios.tcgetattr(_terminal_fd)
-        tty.setraw(_terminal_fd)
-
-def restore_terminal():
-    """Restore terminal to normal mode (Unix/Mac only)"""
-    global _terminal_settings, _terminal_fd
-    if sys.platform != 'win32' and _terminal_settings is not None:
-        import termios
-        termios.tcsetattr(_terminal_fd, termios.TCSADRAIN, _terminal_settings)
-
-def get_key_non_blocking():
+def find_serial_port():
     """
-    Get keyboard input in non-blocking mode.
-    Returns currently pressed key or None if no key pressed.
-
-    IMPORTANT: Clears entire keyboard buffer to prevent lag when key is released.
-    """
-    if sys.platform == 'win32':
-        import msvcrt
-
-        last_key = None
-
-        # Clear entire buffer - read all pending characters
-        while msvcrt.kbhit():
-            key = msvcrt.getch()
-            # Handle special keys
-            if key == b'\x1b':  # ESC
-                last_key = 'esc'
-            elif key == b' ':  # SPACE
-                last_key = ' '
-            else:
-                try:
-                    last_key = key.decode('utf-8').lower()
-                except:
-                    pass
-
-        return last_key
-    else:
-        # Linux/Mac: use select for non-blocking input
-        import select
-
-        last_key = None
-
-        # Clear entire buffer
-        while True:
-            rlist, _, _ = select.select([sys.stdin], [], [], 0)
-            if rlist:
-                ch = sys.stdin.read(1)
-                if ord(ch) == 27:  # ESC
-                    last_key = 'esc'
-                elif ch == ' ':  # SPACE
-                    last_key = ' '
-                else:
-                    last_key = ch.lower()
-            else:
-                break
-
-        return last_key
-
-
-def init_controller():
-    """
-    Try to initialize DualSense controller.
-    Returns tuple: (controller object, calibration offsets) if successful, (None, None) otherwise.
-    """
-    if not DUALSENSE_AVAILABLE:
-        return None, None
-
-    try:
-        ds = pydualsense()
-        ds.init()
-
-        print("✅ DualSense controller connected!")
-
-        # Set LED to blue to indicate connection
-        try:
-            ds.light.setColorI(0, 0, 255)
-        except:
-            pass
-
-        # Calibrate joysticks
-        print("\n[Calibration] Please release all joysticks to center position...")
-        print("[Calibration] Calibrating in 2 seconds...")
-        time.sleep(2)
-
-        # Read center position multiple times and average
-        lx_samples = []
-        ly_samples = []
-        rx_samples = []
-        ry_samples = []
-
-        for i in range(10):
-            lx_samples.append(ds.state.LX)
-            ly_samples.append(ds.state.LY)
-            rx_samples.append(ds.state.RX)
-            ry_samples.append(ds.state.RY)
-            time.sleep(0.05)
-
-        # Calculate offsets (how much to subtract to get to 128)
-        calibration = {
-            'LX': sum(lx_samples) // len(lx_samples) - 128,
-            'LY': sum(ly_samples) // len(ly_samples) - 128,
-            'RX': sum(rx_samples) // len(rx_samples) - 128,
-            'RY': sum(ry_samples) // len(ry_samples) - 128,
-        }
-
-        print(f"[Calibration] ✅ Complete!")
-        print(f"[Calibration] Offsets - LX:{calibration['LX']:+4d} LY:{calibration['LY']:+4d} RX:{calibration['RX']:+4d} RY:{calibration['RY']:+4d}")
-
-        return ds, calibration
-
-    except Exception as e:
-        print(f"⚠️  Controller init failed: {e}")
-        return None, None
-
-
-def read_controller_input(ds, calibration=None, deadzone=20):
-    """
-    Read DualSense controller joystick values and convert to velocity components.
-
-    Args:
-        ds: DualSense controller object
-        calibration: Dict with calibration offsets for LX, LY, RX, RY
-        deadzone: Deadzone threshold (0-128) to ignore stick drift
+    Automatically detect the serial port for USB-to-Serial adapter.
 
     Returns:
-        Tuple of (forward_vel, strafe_vel, rotate_vel) normalized -1.0 to 1.0
-        Returns (0, 0, 0) if controller disconnected
+        str: The detected port path, or None if not found
     """
-    if ds is None:
-        return (0.0, 0.0, 0.0)
+    system = platform.system()
 
-    try:
-        # Read joystick values (0-255, centered at 128)
-        lx_raw = ds.state.LX
-        ly_raw = ds.state.LY
-        rx_raw = ds.state.RX
-        ry_raw = ds.state.RY
+    if system == "Darwin":  # macOS
+        patterns = [
+            "/dev/cu.usbserial*",
+            "/dev/cu.SLAB_USBtoUART*",
+            "/dev/cu.wchusbserial*",
+            "/dev/cu.usbmodem*",
+        ]
+        for pattern in patterns:
+            ports = glob.glob(pattern)
+            if ports:
+                return ports[0]
 
-        # Apply calibration offsets
-        if calibration:
-            lx = lx_raw - 128 - calibration['LX']
-            ly = ly_raw - 128 - calibration['LY']
-            rx = rx_raw - 128 - calibration['RX']
-            ry = ry_raw - 128 - calibration['RY']
-        else:
-            lx = lx_raw - 128
-            ly = ly_raw - 128
-            rx = rx_raw - 128
-            ry = ry_raw - 128
+    elif system == "Linux":
+        patterns = [
+            "/dev/ttyUSB*",
+            "/dev/ttyACM*",
+        ]
+        for pattern in patterns:
+            ports = glob.glob(pattern)
+            if ports:
+                return ports[0]
 
-        # Apply deadzone
-        if abs(lx) < deadzone:
-            lx = 0
-        if abs(ly) < deadzone:
-            ly = 0
-        if abs(rx) < deadzone:
-            rx = 0
-        if abs(ry) < deadzone:
-            ry = 0
+    elif system == "Windows":
+        import serial.tools.list_ports
+        ports = list(serial.tools.list_ports.comports())
+        if ports:
+            return ports[0].device
 
-        # Normalize to -1.0 to 1.0
-        forward_vel = -ly / 128.0   # Negative because stick up = negative Y
-        strafe_vel = lx / 128.0     # Right = positive
-        rotate_vel = rx / 128.0     # Right = positive rotation
-
-        return (forward_vel, strafe_vel, rotate_vel)
-
-    except Exception as e:
-        print(f"⚠️  Controller read error: {e}")
-        return (0.0, 0.0, 0.0)
-
-
-def calculate_motor_velocities_from_components(forward, strafe, rotate, max_speed):
-    """
-    Calculate motor velocities from velocity components.
-
-    Args:
-        forward: Forward/back component (-1.0 to 1.0)
-        strafe: Left/right strafe component (-1.0 to 1.0)
-        rotate: Rotation component (-1.0 to 1.0)
-        max_speed: Maximum motor speed (0-1023)
-
-    Returns:
-        Dict with motor roles mapped to velocities
-    """
-    velocities = {
-        "left": int((forward + rotate) * max_speed),
-        "right": int((forward - rotate) * max_speed),
-        "back": int(strafe * max_speed)
-    }
-
-    # Clamp to valid range
-    for key in velocities:
-        velocities[key] = max(-1023, min(1023, velocities[key]))
-
-    return velocities
-
-
-def calculate_motor_velocities(command, speed):
-    """
-    Calculate motor velocities for keyboard commands.
-
-    Returns dict with motor roles mapped to velocities.
-    Positive = CW, Negative = CCW, 0 = stop
-    """
-    velocities = {"left": 0, "right": 0, "back": 0}
-
-    if command == 'q':  # rotate left(CCW)
-        velocities["left"] = speed
-        velocities["right"] = speed
-        velocities["back"] = 0
-
-    elif command == 'e':  # rotate right(CW)
-        velocities["left"] = -speed
-        velocities["right"] = -speed
-        velocities["back"] = 0
-
-    elif command == 'a':  # Left strafe
-        velocities["left"] = 0
-        velocities["right"] = 0
-        velocities["back"] = speed
-
-    elif command == 'd':  # Right strafe
-        velocities["left"] = 0
-        velocities["right"] = 0
-        velocities["back"] = -speed
-
-    elif command == 'w':  # forward
-        velocities["left"] = -speed
-        velocities["right"] = speed
-        velocities["back"] = 0
-
-    elif command == 's':  # backward
-        velocities["left"] = speed
-        velocities["right"] = -speed
-        velocities["back"] = 0
-
-    elif command == ' ':  # Stop
-        velocities["left"] = 0
-        velocities["right"] = 0
-        velocities["back"] = 0
-
-    return velocities
-
-
-def setup_motors(bus):
-    """Configure all motors for velocity mode"""
-    print("[setup] Configuring motors for velocity mode...")
-
-    # Disable torque before mode change
-    bus.disable_torque()
-    time.sleep(0.1)
-
-    # Set all motors to velocity mode
-    for role, motor_id in MOTOR_ROLES.items():
-        motor_name = f"motor_{motor_id}"
-        bus.write("Operating_Mode", motor_name, OperatingMode.VELOCITY.value)
-        bus.write("Torque_Limit", motor_name, 700)
-        time.sleep(0.05)
-
-    # Enable torque
-    bus.enable_torque()
-    time.sleep(0.1)
-    print("[setup] Motors ready!")
-
-
-def stop_all_motors(bus):
-    """Stop all motors with retries"""
-    for role, motor_id in MOTOR_ROLES.items():
-        motor_name = f"motor_{motor_id}"
-        for _ in range(5):
-            bus.write("Goal_Velocity", motor_name, 0)
-            time.sleep(0.01)
-    time.sleep(0.2)
-
-
-def send_velocities(bus, velocities):
-    """Send velocity commands to motors based on role mapping"""
-    for role, velocity in velocities.items():
-        motor_id = MOTOR_ROLES[role]
-        motor_name = f"motor_{motor_id}"
-        bus.write("Goal_Velocity", motor_name, velocity)
+    return None
 
 
 def print_controls(has_controller):
@@ -387,205 +118,180 @@ def print_controls(has_controller):
     print("="*60 + "\n")
 
 
-def find_serial_port():
-    """
-    Automatically detect the serial port for USB-to-Serial adapter.
-
-    Returns:
-        str: The detected port path, or None if not found
-    """
-    system = platform.system()
-
-    if system == "Darwin":  # macOS
-        # Common patterns for USB serial adapters on macOS
-        patterns = [
-            "/dev/cu.usbserial*",
-            "/dev/cu.SLAB_USBtoUART*",
-            "/dev/cu.wchusbserial*",
-            "/dev/cu.usbmodem*",
-        ]
-        for pattern in patterns:
-            ports = glob.glob(pattern)
-            if ports:
-                return ports[0]  # Return first match
-
-    elif system == "Linux":
-        # Common patterns for USB serial adapters on Linux
-        patterns = [
-            "/dev/ttyUSB*",
-            "/dev/ttyACM*",
-        ]
-        for pattern in patterns:
-            ports = glob.glob(pattern)
-            if ports:
-                return ports[0]
-
-    elif system == "Windows":
-        # On Windows, try common COM ports
-        import serial.tools.list_ports
-        ports = list(serial.tools.list_ports.comports())
-        if ports:
-            return ports[0].device
-
-    return None
-
-
 def main():
     parser = argparse.ArgumentParser(description="Keyboard control for 3-wheel omnidirectional base")
-    parser.add_argument("--port", type=str, default=None, help="Serial port (auto-detected if not specified)")
-    parser.add_argument("--speed", type=int, default=400, help="Base movement speed (0-1023)")
-    parser.add_argument("--motor-left", type=int, default=1, help="Left motor ID (default: 1)")
-    parser.add_argument("--motor-right", type=int, default=2, help="Right motor ID (default: 2)")
-    parser.add_argument("--motor-back", type=int, default=3, help="Back motor ID (default: 3)")
+    parser.add_argument("--port", type=str, default=None, help="Serial port (overrides config.yaml)")
+    parser.add_argument("--speed", type=int, default=None, help="Base movement speed (overrides config.yaml)")
+    parser.add_argument("--motor-left", type=int, default=None, help="Left motor ID (overrides config.yaml)")
+    parser.add_argument("--motor-right", type=int, default=None, help="Right motor ID (overrides config.yaml)")
+    parser.add_argument("--motor-back", type=int, default=None, help="Back motor ID (overrides config.yaml)")
+    parser.add_argument("--show-config", action="store_true", help="Show motor configuration and exit")
     args = parser.parse_args()
 
-    # Auto-detect port if not specified
-    if args.port is None:
+    # Load motor configuration from config.yaml with CLI overrides
+    print("[init] Loading motor configuration...")
+    motor_config = load_motor_config(
+        motor_left=args.motor_left,
+        motor_right=args.motor_right,
+        motor_back=args.motor_back,
+        speed=args.speed,
+        port=args.port
+    )
+
+    # Validate configuration
+    if not validate_motor_config(motor_config):
+        print("❌ Invalid motor configuration. Please check motors/config.yaml")
+        return
+
+    # Show config and exit if requested
+    if args.show_config:
+        print_motor_config(motor_config)
+        return
+
+    # Extract values from config
+    motor_ids = motor_config['motor_ids']
+    motor_settings = motor_config['motor_settings']
+    serial_config = motor_config['serial']
+    control_config = motor_config['control']
+
+    # Use speed from args or config
+    speed = args.speed if args.speed is not None else motor_settings['default_speed']
+
+    # Debug: Show speed being used
+    print(f"\n[config] Using speed: {speed} (max_velocity: {motor_settings['max_velocity']})")
+    print(f"[config] Speed multiplier will be: {speed / motor_settings['max_velocity']:.4f}")
+    print(f"[config] Expected motor velocity: ~{int(speed)} when input is 1.0")
+
+    # Auto-detect port if not specified in args or config
+    port = args.port if args.port is not None else serial_config['port']
+    if port is None:
         print("[init] Auto-detecting serial port...")
-        args.port = find_serial_port()
-        if args.port is None:
+        port = find_serial_port()
+        if port is None:
             print("❌ Error: Could not auto-detect serial port.")
             print("   Please connect your USB-to-Serial adapter and try again.")
-            print("   Or manually specify the port with --port option.")
+            print("   Or manually specify the port with --port option or in motors/config.yaml")
             print("\n   On macOS, check available ports with: ls /dev/cu.*")
             print("   On Linux, check: ls /dev/ttyUSB*")
             print("   On Windows, use: COM3, COM4, etc.")
             return
-        print(f"✅ Found serial port: {args.port}")
-
-    # Update motor role mapping if custom IDs provided
-    MOTOR_ROLES["left"] = args.motor_left
-    MOTOR_ROLES["right"] = args.motor_right
-    MOTOR_ROLES["back"] = args.motor_back
+        print(f"✅ Found serial port: {port}")
+    else:
+        print(f"[init] Using serial port: {port}")
 
     # Create motor configuration
     motors = {}
-    for role, motor_id in MOTOR_ROLES.items():
+    for role, motor_id in motor_ids.items():
         motor_name = f"motor_{motor_id}"
         motors[motor_name] = Motor(
             id=motor_id,
-            model="sts3215",
+            model=motor_settings['model'],
             norm_mode=MotorNormMode.DEGREES
         )
 
-    # Initialize controller
+    # Initialize input handler
     print("\n[init] Checking for DualSense controller...")
-    controller, calibration = init_controller()
+    input_handler = CombinedInputHandler(enable_keyboard=True, enable_dualsense=True)
 
-    if controller:
+    if input_handler.has_controller():
         print("🎮 Input Mode: Keyboard + DualSense Controller")
     else:
         print("⌨️  Input Mode: Keyboard Only")
 
     # Connect to bus
-    print(f"\n[init] Connecting to motors on {args.port}...")
+    print(f"\n[init] Connecting to motors on {port}...")
     bus = FeetechMotorsBus(
-        port=args.port,
+        port=port,
         motors=motors,
-        protocol_version=0
+        protocol_version=serial_config['protocol_version']
     )
-
-    # Setup terminal for keyboard input (macOS/Linux)
-    setup_terminal()
 
     connected = False
     try:
         bus.connect()
         connected = True
-        setup_motors(bus)
-        print_controls(controller is not None)
 
-        print("Ready! Press and HOLD keys to control (release to stop)...\n")
-        print("ℹ️  Control runs at 20Hz - motors stop immediately when controls released")
-        print("📊 Command stream display: Shows every 10th cycle (0.5s intervals)\n")
+        # Create movement controller
+        controller = OmniBaseController(
+            bus=bus,
+            motor_ids=motor_ids,
+            max_velocity=motor_settings['max_velocity']
+        )
+
+        # Setup motors with configured torque limit
+        controller.setup_motors(torque_limit=motor_settings['torque_limit'])
+
+        # Print controls
+        print_controls(input_handler.has_controller())
+
+        sys.stdout.write("Ready! Press and HOLD keys to control (release to stop)...\r\n\r\n")
+        sys.stdout.write(f"ℹ️  Control runs at {control_config['frequency']}Hz - motors stop immediately when controls released\r\n")
+        sys.stdout.write(f"📊 Command stream display: Shows every {control_config['print_interval']} cycles\r\n\r\n")
+        sys.stdout.flush()
 
         loop_counter = 0
-        control_frequency = 20  # Hz
-        loop_delay = 1.0 / control_frequency  # 0.05 seconds = 50ms
-        print_interval = 10  # Print every 10 loops (0.5 seconds at 20Hz)
+        control_frequency = control_config['frequency']
+        loop_delay = 1.0 / control_frequency
+        print_interval = control_config['print_interval']
 
-        command_names = {
-            'w': 'FORWARD',
-            's': 'BACKWARD',
-            'a': 'LEFT',
-            'd': 'RIGHT',
-            'q': 'ROTATE LEFT',
-            'e': 'ROTATE RIGHT',
-            ' ': 'STOP',
-            None: 'STOPPED'  # No key pressed
-        }
-
-        print(f"{'Cycle':<6} {'Input':<10} {'Command':<15} {'Left':<6} {'Right':<6} {'Back':<6}")
-        print("-" * 60)
+        sys.stdout.write(f"{'Cycle':<6} {'Input':<15} {'Fwd':<6} {'Str':<6} {'Rot':<6} {'Left':<6} {'Right':<6} {'Back':<6}\r\n")
+        sys.stdout.write("-" * 75 + "\r\n")
+        sys.stdout.flush()
 
         while True:
             loop_counter += 1
 
-            # Get current key state (non-blocking)
-            key = get_key_non_blocking()
+            # Read inputs
+            state = input_handler.read()
 
-            # Check for ESC to exit
-            if key == 'esc':
+            # Check for exit
+            if state.exit_requested:
                 print("\n[exit] ESC pressed, stopping motors...")
                 break
 
-            # Read controller input
-            controller_forward, controller_strafe, controller_rotate = read_controller_input(controller, calibration)
-
-            # Determine keyboard command
-            current_command = None
-            if key in ['w', 'a', 's', 'd', 'q', 'e', ' ']:
-                current_command = key
-
-            # Calculate velocities from keyboard
-            if current_command:
-                kb_velocities = calculate_motor_velocities(current_command, args.speed)
-            else:
-                kb_velocities = {"left": 0, "right": 0, "back": 0}
-
-            # Calculate velocities from controller
-            ctrl_velocities = calculate_motor_velocities_from_components(
-                controller_forward, controller_strafe, controller_rotate, args.speed
+            # Send movement command
+            # Pass speed directly as absolute motor speed value (e.g., 400)
+            velocities = controller.move(
+                forward=state.forward,
+                strafe=state.strafe,
+                rotate=state.rotate,
+                speed=speed  # Absolute speed value (0-1023)
             )
 
-            # Combine keyboard and controller inputs (additive)
-            velocities = {
-                "left": kb_velocities["left"] + ctrl_velocities["left"],
-                "right": kb_velocities["right"] + ctrl_velocities["right"],
-                "back": kb_velocities["back"] + ctrl_velocities["back"]
-            }
-
-            # Clamp to valid range
-            for key_name in velocities:
-                velocities[key_name] = max(-1023, min(1023, velocities[key_name]))
-
-            # Always send velocities (even if zero) to maintain control
-            send_velocities(bus, velocities)
+            # DEBUG: Print actual values on first movement
+            if loop_counter == 1 and (abs(state.forward) > 0 or abs(state.strafe) > 0 or abs(state.rotate) > 0):
+                sys.stdout.write(f"\r\n[DEBUG] Input: fwd={state.forward:.2f}, strafe={state.strafe:.2f}, rot={state.rotate:.2f}\r\n")
+                sys.stdout.write(f"[DEBUG] Speed parameter: {speed}\r\n")
+                sys.stdout.write(f"[DEBUG] Motor velocities: left={velocities['left']}, right={velocities['right']}, back={velocities['back']}\r\n")
+                sys.stdout.flush()
 
             # Print command stream at regular intervals
             if loop_counter % print_interval == 0:
                 # Determine input source for display
-                has_kb = current_command is not None
-                has_ctrl = abs(controller_forward) > 0.01 or abs(controller_strafe) > 0.01 or abs(controller_rotate) > 0.01
+                has_kb = state.keyboard_key is not None
+                has_ctrl = state.controller_active
 
                 if has_kb and has_ctrl:
-                    input_display = f"KB+Ctrl"
+                    input_display = "KB+Ctrl"
                 elif has_kb:
-                    input_display = f"KB:{key}"
+                    input_display = f"KB:{state.keyboard_key.upper()}"
                 elif has_ctrl:
                     input_display = "Ctrl"
                 else:
                     input_display = "none"
 
-                cmd_name = command_names.get(current_command, 'JOYSTICK' if has_ctrl else 'STOPPED')
+                # Use \r\n for proper line breaks in raw terminal mode
+                output = (f"{loop_counter:<6d} {input_display:<15} "
+                         f"{state.forward:+.2f}  {state.strafe:+.2f}  {state.rotate:+.2f}  "
+                         f"{velocities['left']:+6d} {velocities['right']:+6d} {velocities['back']:+6d}\r\n")
+                sys.stdout.write(output)
+                sys.stdout.flush()
 
-                print(f"{loop_counter:<6d} {input_display:<10} {cmd_name:<15} {velocities['left']:+6d} {velocities['right']:+6d} {velocities['back']:+6d}")
-
-            # Sleep to maintain control frequency (20Hz)
+            # Sleep to maintain control frequency
             time.sleep(loop_delay)
 
     except ConnectionError as e:
-        print(f"\n❌ Connection Failed: Could not connect to motors on {args.port}")
+        print(f"\n❌ Connection Failed: Could not connect to motors on {port}")
         print(f"   Make sure:")
         print(f"   • Motors are powered on")
         print(f"   • USB cable is connected")
@@ -598,38 +304,22 @@ def main():
 
     except Exception as e:
         print(f"\n❌ Unexpected Error: {e}")
+        import traceback
+        traceback.print_exc()
 
     finally:
-        # Restore terminal settings
-        restore_terminal()
-
+        # Cleanup
         if connected:
             print("\n[cleanup] Stopping all motors...")
             try:
-                stop_all_motors(bus)
-                bus.disable_torque()
-                time.sleep(0.1)
-
-                # Reset to position mode
-                for role, motor_id in MOTOR_ROLES.items():
-                    motor_name = f"motor_{motor_id}"
-                    bus.write("Operating_Mode", motor_name, OperatingMode.POSITION.value)
-                    time.sleep(0.05)
-            except:
-                pass
-
-            try:
+                controller.stop()
+                controller.reset_to_position_mode()
                 bus.disconnect()
             except:
                 pass
 
-        # Close controller if connected
-        if controller is not None:
-            try:
-                controller.close()
-                print("✅ Controller disconnected.")
-            except:
-                pass
+        # Close input handler
+        input_handler.close()
 
         print("✅ Done. Motors stopped and disconnected.")
 
