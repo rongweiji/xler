@@ -16,8 +16,8 @@ from typing import Any
 
 import numpy as np
 
-from motors import Motor, MotorCalibration, MotorNormMode
-from motors.feetech import FeetechMotorsBus, OperatingMode
+from .motors_bus import Motor, MotorCalibration, MotorNormMode
+from .feetech import FeetechMotorsBus, OperatingMode
 
 logger = logging.getLogger(__name__)
 

@@ -1,22 +1,32 @@
 #!/usr/bin/env python
 """
-xler.py - Robot Base Control (no camera / no video recording)
+xler.py - Robot Base Control with LeKiwi Kinematics
 
-Control the robot base using keyboard and optional DualSense controller.
-This variant removes camera capture and recording features.
+Control a 3-wheel omnidirectional robot base using LeKiwi kinematics approach.
+Uses WASD+QE keyboard controls for movement.
+
+Features:
+- Matrix-based kinematics with proper m/s to motor conversion
+- Velocity scaling to prevent motor saturation
+- Simple keyboard-only input
+- Configuration via YAML file
+- Uses motors.feetech like lekiwi_base example
 
 Usage:
-    python xler.py --speed 400
-    python xler.py --port /dev/cu.usbserial-XXXXX --speed 400
+    python xler.py
+    python xler.py --port /dev/cu.usbserial-XXXXX
+    python xler.py --speed 0.8
+    python xler.py --show-config
 
 Controls:
-    W/A/S/D - Forward/Left/Back/Right
+    W/A/S/D - Forward/Left/Back/Rightw
     Q/E - Rotate Left/Right
     SPACE - Stop
     ESC - Exit
 """
 
 import argparse
+import logging
 import sys
 import time
 import glob
@@ -26,19 +36,85 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from motors.motors_bus import Motor, MotorNormMode
-from motors.feetech import FeetechMotorsBus, OperatingMode
-from motors.movement_controller import OmniBaseController
-from motors.input_handler import CombinedInputHandler
-from motors.config_loader import load_motor_config, print_motor_config, validate_motor_config
+import yaml
+
+# Import from motors2 (self-contained package)
+from motors2 import Motor, MotorNormMode
+from motors2.feetech import FeetechMotorsBus
+from motors2.base_controller import LeKiwiBaseController
+from motors2.keyboard_input import KeyboardInput
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def load_config(config_path: str = "motors2/config.yaml", **overrides) -> dict:
+    """
+    Load configuration from YAML file with optional overrides.
+
+    Args:
+        config_path: Path to config.yaml file
+        **overrides: Key-value pairs to override config values
+
+    Returns:
+        Configuration dictionary
+    """
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Apply command-line overrides
+    if 'port' in overrides and overrides['port'] is not None:
+        config['serial']['port'] = overrides['port']
+    if 'motor_left' in overrides and overrides['motor_left'] is not None:
+        config['motor_ids']['left'] = overrides['motor_left']
+    if 'motor_right' in overrides and overrides['motor_right'] is not None:
+        config['motor_ids']['right'] = overrides['motor_right']
+    if 'motor_back' in overrides and overrides['motor_back'] is not None:
+        config['motor_ids']['back'] = overrides['motor_back']
+    if 'max_speed' in overrides and overrides['max_speed'] is not None:
+        config['control']['max_speed_ms'] = overrides['max_speed']
+
+    return config
+
+
+def print_config(config: dict):
+    """Pretty print configuration."""
+    print("\n" + "="*60)
+    print("Configuration")
+    print("="*60)
+    print(f"\nMotor IDs:")
+    print(f"  Left:  {config['motor_ids']['left']}")
+    print(f"  Right: {config['motor_ids']['right']}")
+    print(f"  Back:  {config['motor_ids']['back']}")
+    print(f"\nSerial:")
+    print(f"  Port: {config['serial']['port']}")
+    print(f"  Baudrate: {config['serial']['baudrate']}")
+    print(f"  Protocol: {config['serial']['protocol_version']}")
+    print(f"\nMotor:")
+    print(f"  Model: {config['motor']['model']}")
+    print(f"  Torque Limit: {config['motor']['torque_limit']}")
+    print(f"\nGeometry:")
+    print(f"  Wheel Radius: {config['geometry']['wheel_radius_m']} m")
+    print(f"  Base Radius: {config['geometry']['base_radius_m']} m")
+    print(f"  Wheel Angles: {config['geometry']['wheel_axis_angles_deg']} deg")
+    print(f"  Max Wheel Raw: {config['geometry']['max_wheel_raw']}")
+    print(f"\nControl:")
+    print(f"  Frequency: {config['control']['frequency']} Hz")
+    print(f"  Max Speed: {config['control']['max_speed_ms']} m/s")
+    print(f"  Max Rotation: {config['control']['max_rotation_degs']} deg/s")
+    print("="*60 + "\n")
 
 
 def find_serial_port():
     """
-    Automatically detect the serial port for USB-to-Serial adapter.
+    Auto-detect serial port for USB-to-Serial adapter.
 
     Returns:
-        str: The detected port path, or None if not found
+        str: Detected port path, or None if not found
     """
     system = platform.system()
 
@@ -55,10 +131,7 @@ def find_serial_port():
                 return ports[0]
 
     elif system == "Linux":
-        patterns = [
-            "/dev/ttyUSB*",
-            "/dev/ttyACM*",
-        ]
+        patterns = ["/dev/ttyUSB*", "/dev/ttyACM*"]
         for pattern in patterns:
             ports = glob.glob(pattern)
             if ports:
@@ -73,180 +146,181 @@ def find_serial_port():
     return None
 
 
-def print_banner(has_controller):
-    """Print startup banner with instructions (no camera info)"""
+def print_banner():
+    """Print startup banner."""
     print("\n" + "="*70)
-    print("  XLER - Robot Base Control")
+    print("  XLER - Robot Base Control (LeKiwi Kinematics)")
     print("="*70)
-    print("\n🤖 Motors: Ready for control")
-
-    if has_controller:
-        print("🎮 Input: Keyboard + DualSense Controller")
-    else:
-        print("⌨️  Input: Keyboard Only")
-
+    print("\n🤖 3-Wheel Omnidirectional Base Control")
+    print("📐 Matrix-based kinematics with velocity scaling")
+    print("⚡ Self-contained motors2 package")
     print("\n⌨️  Keyboard Controls:")
-    print("  W/A/S/D - Forward/Left/Back/Right")
-    print("  Q/E - Rotate Left/Right")
-    print("  SPACE - Stop")
-    print("  ESC - Exit")
-
-    if has_controller:
-        print("\n🎮 DualSense Controller:")
-        print("  Left Stick - Forward/Back + Strafe")
-        print("  Right Stick - Rotate")
-
-    print("\n💡 Exit: Press ESC or Ctrl+C to stop motors and exit")
+    print("  W - Forward    |  A - Strafe Left   |  Q - Rotate Left")
+    print("  S - Backward   |  D - Strafe Right  |  E - Rotate Right")
+    print("  SPACE - Stop   |  ESC - Exit")
+    print("\n💡 Tips:")
+    print("  - HOLD keys to move, RELEASE to stop")
+    print("  - Combine W/A/S/D for diagonal movement")
+    print("  - Add Q/E for rotation while moving")
     print("="*70 + "\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Robot base control (no camera)")
+    parser = argparse.ArgumentParser(description="Robot base control with LeKiwi kinematics")
     parser.add_argument("--port", type=str, default=None, help="Serial port (overrides config.yaml)")
-    parser.add_argument("--speed", type=int, default=None, help="Base movement speed (overrides config.yaml)")
-    parser.add_argument("--motor-left", type=int, default=None, help="Left motor ID (overrides config.yaml)")
-    parser.add_argument("--motor-right", type=int, default=None, help="Right motor ID (overrides config.yaml)")
-    parser.add_argument("--motor-back", type=int, default=None, help="Back motor ID (overrides config.yaml)")
-    parser.add_argument("--show-config", action="store_true", help="Show motor configuration and exit")
+    parser.add_argument("--speed", type=float, default=None, help="Max speed in m/s (overrides config.yaml)")
+    parser.add_argument("--motor-left", type=int, default=None, help="Left motor ID")
+    parser.add_argument("--motor-right", type=int, default=None, help="Right motor ID")
+    parser.add_argument("--motor-back", type=int, default=None, help="Back motor ID")
+    parser.add_argument("--show-config", action="store_true", help="Show configuration and exit")
     args = parser.parse_args()
 
-    # Load motor configuration from config.yaml with CLI overrides
-    print("[init] Loading motor configuration...")
-    motor_config = load_motor_config(
+    # Load configuration
+    print("[init] Loading configuration from motors2/config.yaml...")
+    config = load_config(
         motor_left=args.motor_left,
         motor_right=args.motor_right,
         motor_back=args.motor_back,
-        speed=args.speed,
+        max_speed=args.speed,
         port=args.port
     )
 
-    # Validate configuration
-    if not validate_motor_config(motor_config):
-        print("❌ Invalid motor configuration. Please check motors/config.yaml")
-        return
-
     # Show config and exit if requested
     if args.show_config:
-        print_motor_config(motor_config)
+        print_config(config)
         return
 
-    # Extract values from config
-    motor_ids = motor_config['motor_ids']
-    motor_settings = motor_config['motor_settings']
-    serial_config = motor_config['serial']
-    control_config = motor_config['control']
-
-    # Use speed from args or config
-    speed = args.speed if args.speed is not None else motor_settings['default_speed']
-
-    # Auto-detect port if not specified in args or config
-    port = args.port if args.port is not None else serial_config['port']
+    # Auto-detect port if not specified
+    port = config['serial']['port']
     if port is None:
         print("[init] Auto-detecting serial port...")
         port = find_serial_port()
         if port is None:
             print("❌ Error: Could not auto-detect serial port.")
-            print("   Please specify with --port option or in motors/config.yaml")
+            print("   Please specify with --port option or in motors2/config.yaml")
             return
         print(f"✅ Found serial port: {port}")
+        config['serial']['port'] = port
     else:
         print(f"[init] Using serial port: {port}")
 
-    # Initialize input handler
-    print(f"\n[init] Initializing input handlers...")
-    input_handler = CombinedInputHandler(enable_keyboard=True, enable_dualsense=True)
+    # Create motors dict (like lekiwi_base does)
+    # Note: motor names must match what base_controller expects
+    motors = {
+        "base_left_wheel": Motor(
+            config['motor_ids']['left'],
+            config['motor']['model'],
+            MotorNormMode.DEGREES
+        ),
+        "base_right_wheel": Motor(
+            config['motor_ids']['right'],
+            config['motor']['model'],
+            MotorNormMode.DEGREES
+        ),
+        "base_back_wheel": Motor(
+            config['motor_ids']['back'],
+            config['motor']['model'],
+            MotorNormMode.DEGREES
+        ),
+    }
 
-    # Create motor bus configuration
-    motors = {}
-    for role, motor_id in motor_ids.items():
-        motor_name = f"motor_{motor_id}"
-        motors[motor_name] = Motor(
-            id=motor_id,
-            model=motor_settings['model'],
-            norm_mode=MotorNormMode.DEGREES
-        )
+    # Initialize keyboard input
+    print("\n[init] Initializing keyboard input...")
+    keyboard = KeyboardInput()
 
-    # Connect to motor bus
-    print(f"\n[init] Connecting to motors on {port}...")
+    # Create Feetech motor bus (like lekiwi_base does)
+    print(f"\n[init] Creating FeetechMotorsBus on {port}...")
     bus = FeetechMotorsBus(
         port=port,
         motors=motors,
-        protocol_version=serial_config['protocol_version']
+        protocol_version=config['serial']['protocol_version']
     )
 
     connected = False
     try:
+        # Connect to motors
+        print(f"[init] Connecting to motors...")
         bus.connect()
         connected = True
 
-        # Create movement controller
-        controller = OmniBaseController(
-            bus=bus,
-            motor_ids=motor_ids,
-            max_velocity=motor_settings['max_velocity']
-        )
-
-        # Setup motors with configured torque limit
-        controller.setup_motors(torque_limit=motor_settings['torque_limit'])
+        # Create LeKiwi controller
+        controller = LeKiwiBaseController(bus, config)
+        controller.configure()
 
         # Print banner
-        print_banner(input_handler.has_controller())
+        print_banner()
 
+        # Print header for status output
         sys.stdout.write("Ready! Starting control loop...\r\n\r\n")
-        sys.stdout.write(f"{'Time':<8} {'Input':<45} {'Velocities (L/R/B)':<20}\r\n")
-        sys.stdout.write("-" * 75 + "\r\n")
+        sys.stdout.write(f"{'Time':<8} {'Input':<30} {'Body Vel (x/y/θ)':<25} {'Wheel Raw (L/R/B)':<25}\r\n")
+        sys.stdout.write("-" * 88 + "\r\n")
         sys.stdout.flush()
 
         loop_counter = 0
-        control_frequency = control_config['frequency']
+        control_frequency = config['control']['frequency']
         loop_delay = 1.0 / control_frequency
-        print_interval = control_config['print_interval']
+        print_interval = config['control']['print_interval']
+        max_speed = config['control']['max_speed_ms']
+        max_rotation = config['control']['max_rotation_degs']
 
         start_time = time.time()
 
         while True:
             loop_counter += 1
 
-            # Read inputs
-            state = input_handler.read()
+            # Read keyboard input
+            forward, strafe, rotate, exit_requested = keyboard.read()
 
             # Check for exit
-            if state.exit_requested:
+            if exit_requested:
                 sys.stdout.write("\r\n[exit] ESC pressed, stopping...\r\n")
                 sys.stdout.flush()
                 break
 
-            # Send movement command
-            velocities = controller.move(
-                forward=state.forward,
-                strafe=state.strafe,
-                rotate=state.rotate,
-                speed=speed  # Absolute speed value (0-1023)
+            # Convert normalized input to m/s and deg/s
+            x_vel = forward * max_speed      # Forward/backward in m/s
+            y_vel = strafe * max_speed       # Left/right in m/s
+            theta_vel = rotate * max_rotation  # Rotation in deg/s
+
+            # Send movement command (LeKiwi kinematics)
+            wheel_velocities = controller.move(
+                x_vel=x_vel,
+                y_vel=y_vel,
+                theta_vel=theta_vel
             )
 
-            # Print control info periodically
+            # Print status periodically
             if loop_counter % print_interval == 0:
                 elapsed = time.time() - start_time
                 time_str = f"{elapsed:.1f}s"
 
-                # Build input display string
-                input_str = input_handler.get_debug_string()
+                # Build input string
+                input_parts = []
+                if abs(forward) > 0.01:
+                    input_parts.append(f"Fwd:{forward:+.1f}")
+                if abs(strafe) > 0.01:
+                    input_parts.append(f"Str:{strafe:+.1f}")
+                if abs(rotate) > 0.01:
+                    input_parts.append(f"Rot:{rotate:+.1f}")
+                input_str = " ".join(input_parts) if input_parts else "STOPPED"
 
-                # Add velocity components to display
-                if abs(state.forward) > 0.01 or abs(state.strafe) > 0.01 or abs(state.rotate) > 0.01:
-                    input_str += f" → Fwd:{state.forward:+.2f} Str:{state.strafe:+.2f} Rot:{state.rotate:+.2f}"
+                # Body velocities
+                body_str = f"x:{x_vel:+.2f} y:{y_vel:+.2f} θ:{theta_vel:+.1f}"
 
-                vel_str = f"{velocities['left']:+5d} {velocities['right']:+5d} {velocities['back']:+5d}"
+                # Wheel velocities (motor names)
+                left_vel = wheel_velocities["base_left_wheel"]
+                right_vel = wheel_velocities["base_right_wheel"]
+                back_vel = wheel_velocities["base_back_wheel"]
+                wheel_str = f"{left_vel:+5d} {right_vel:+5d} {back_vel:+5d}"
 
-                # Use \r\n for proper line breaks in raw terminal mode
-                sys.stdout.write(f"{time_str:<8} {input_str:<45} {vel_str:<20}\r\n")
+                sys.stdout.write(f"{time_str:<8} {input_str:<30} {body_str:<25} {wheel_str:<25}\r\n")
                 sys.stdout.flush()
 
             # Maintain control frequency
             time.sleep(loop_delay)
 
     except ConnectionError as e:
-        print(f"\n❌ Connection Failed: Could not connect to motors on {args.port}")
+        print(f"\n❌ Connection Failed: {e}")
         print(f"   Make sure motors are powered and port is correct")
         return
 
@@ -259,20 +333,18 @@ def main():
         traceback.print_exc()
 
     finally:
-        # Cleanup motors
+        # Cleanup
         if connected:
             print("\n[cleanup] Stopping motors...")
             try:
                 controller.stop()
                 controller.reset_to_position_mode()
                 bus.disconnect()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}")
 
-        # Cleanup input
-        input_handler.close()
-
-        print("\n✅ Done. Motors stopped.")
+        keyboard.close()
+        print("\n✅ Done. Motors stopped.\n")
 
 
 if __name__ == "__main__":

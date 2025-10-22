@@ -1,15 +1,31 @@
 """
-motors2 - Simple 3-Wheel Base Control with LeKiwi Kinematics
+motors2 - Self-Contained 3-Wheel Base Control with LeKiwi Kinematics
 
-This package provides a simplified motor control interface using the
-lekiwi_base kinematics approach with proper rotation matrix calculations.
+This package provides complete motor control with LeRobot motor abstractions
+and LeKiwi kinematics for 3-wheel omnidirectional robots.
 
 Key components:
-- base_controller.py: LeKiwi kinematics-based 3-wheel controller
-- keyboard_input.py: Simple WASD+QE keyboard input handler
-- config.yaml: Configuration file for motor IDs and settings
+- motors_bus.py: Base motor bus abstraction (from LeRobot)
+- feetech/: Feetech motor implementation (from LeRobot)
+- base_controller.py: LeKiwi kinematics controller
+- keyboard_input.py: Simple WASD+QE keyboard input
+- config.yaml: Configuration file
 """
 
+# Export motor bus classes
+from .motors_bus import Motor, MotorCalibration, MotorNormMode, MotorsBus, NameOrID, Value
+
+# Export LeKiwi controller
 from .base_controller import LeKiwiBaseController
 
-__all__ = ["LeKiwiBaseController"]
+__all__ = [
+    # Motor classes
+    "Motor",
+    "MotorCalibration",
+    "MotorNormMode",
+    "MotorsBus",
+    "NameOrID",
+    "Value",
+    # Controllers
+    "LeKiwiBaseController",
+]

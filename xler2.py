@@ -38,11 +38,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import yaml
 
-# Import from motors/ folder like lekiwi_base does
-from motors import Motor, MotorNormMode
-from motors.feetech import FeetechMotorsBus
-
-# Import motors2 components
+# Import from motors2 (self-contained package)
+from motors2 import Motor, MotorNormMode
+from motors2.feetech import FeetechMotorsBus
 from motors2.base_controller import LeKiwiBaseController
 from motors2.keyboard_input import KeyboardInput
 
