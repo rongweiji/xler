@@ -1,0 +1,38 @@
+# Motors2 Configuration - LeKiwi 3-Wheel Base
+#
+# This config file defines the minimal necessary settings for controlling
+# a 3-wheel omnidirectional robot base with LeKiwi kinematics.
+
+# Motor ID Assignment
+# Map motor roles (left, right, back) to their physical IDs
+motor_ids:
+  left: 1     # Left front wheel motor ID
+  right: 2     # Right front wheel motor ID
+  back: 3      # Back wheel motor ID
+
+# Serial Port Settings
+serial:
+  port: null                 # Auto-detect if null, or specify like "/dev/cu.usbserial-XXXXX"
+  baudrate: 1000000          # Communication speed
+  protocol_version: 0        # Feetech protocol version (0 or 1)
+
+# Motor Model and Limits
+motor:
+  model: "sts3215"           # Feetech motor model
+  torque_limit: 700          # Motor torque limit (0-1023)
+
+# Robot Geometry (for kinematics calculations)
+geometry:
+  wheel_radius_m: 0.05       # Wheel radius in meters
+  base_radius_m: 0.125       # Distance from center to wheel in meters
+  # Wheel axis angles in degrees (left, back, right)
+  # These define the direction each wheel points relative to the robot body
+  wheel_axis_angles_deg: [150.0, -90.0, 30.0]
+  max_wheel_raw: 3000        # Maximum raw motor speed before velocity scaling
+
+# Control Settings
+control:
+  frequency: 20              # Control loop frequency in Hz
+  max_speed_ms: 1.0          # Maximum linear speed in m/s
+  max_rotation_degs: 180.0   # Maximum rotation speed in deg/s
+  print_interval: 10         # Print debug info every N cycles
