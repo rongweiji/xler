@@ -116,6 +116,21 @@ class LeKiwiBaseController:
         speed_int = int(round(degps * steps_per_deg))
         return max(min(speed_int, 0x7FFF), -0x8000)
 
+    @staticmethod
+    def _raw_to_degps(raw_speed: int) -> float:
+        """
+        Convert raw motor speed to degrees per second.
+        From lekiwi_base._raw_to_degps()
+
+        Args:
+            raw_speed: Raw motor speed value
+
+        Returns:
+            Speed in degrees per second
+        """
+        steps_per_deg = 4096.0 / 360.0
+        return raw_speed / steps_per_deg
+
     def _body_to_wheel_raw(
         self,
         x: float,
@@ -175,6 +190,70 @@ class LeKiwiBaseController:
             "base_back_wheel": wheel_raw[1],
             "base_right_wheel": wheel_raw[2],
         }
+
+    def _wheel_raw_to_body(
+        self,
+        left_wheel_speed: int,
+        back_wheel_speed: int,
+        right_wheel_speed: int,
+    ) -> dict[str, float]:
+        """
+        Convert wheel raw velocities to body frame velocities.
+        Based on lekiwi_base._wheel_raw_to_body()
+
+        Args:
+            left_wheel_speed: Left wheel raw speed
+            back_wheel_speed: Back wheel raw speed
+            right_wheel_speed: Right wheel raw speed
+
+        Returns:
+            Dict with x.vel (m/s), y.vel (m/s), theta.vel (deg/s)
+        """
+        # Convert raw to deg/s
+        wheel_degps = np.array([
+            self._raw_to_degps(left_wheel_speed),
+            self._raw_to_degps(back_wheel_speed),
+            self._raw_to_degps(right_wheel_speed),
+        ])
+
+        # Convert to rad/s
+        wheel_radps = wheel_degps * (np.pi / 180.0)
+
+        # Convert to linear speeds (m/s)
+        wheel_linear_speeds = wheel_radps * self.wheel_radius
+
+        # Build rotation matrix (same as forward kinematics)
+        angles = np.radians(self.wheel_angles)
+        m = np.array([[np.cos(a), np.sin(a), self.base_radius] for a in angles])
+
+        # Inverse kinematics: wheel speeds → body velocities
+        m_inv = np.linalg.inv(m)
+        velocity_vector = m_inv.dot(wheel_linear_speeds)
+
+        x, y, theta_rad = velocity_vector
+        theta = theta_rad * (180.0 / np.pi)
+
+        return {"x.vel": x, "y.vel": y, "theta.vel": theta}
+
+    def get_observation(self) -> dict[str, float]:
+        """
+        Read actual velocities from motors and convert to body frame.
+        Based on lekiwi_base.get_observation()
+
+        Returns:
+            Dict with actual x.vel (m/s), y.vel (m/s), theta.vel (deg/s)
+        """
+        # Read present velocities from all motors
+        base_wheel_vel = self.bus.sync_read("Present_Velocity", self.base_motors)
+
+        # Convert to body frame
+        base_vel = self._wheel_raw_to_body(
+            base_wheel_vel["base_left_wheel"],
+            base_wheel_vel["base_back_wheel"],
+            base_wheel_vel["base_right_wheel"],
+        )
+
+        return base_vel
 
     def move(
         self,

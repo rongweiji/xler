@@ -113,9 +113,9 @@ class KeyboardInput:
             elif key == 's':
                 forward = -1.0
             elif key == 'a':
-                strafe = -1.0
-            elif key == 'd':
                 strafe = 1.0
+            elif key == 'd':
+                strafe = -1.0
             elif key == 'q':
                 rotate = 1.0
             elif key == 'e':

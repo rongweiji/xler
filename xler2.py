@@ -251,10 +251,9 @@ def main():
         print_banner()
 
         # Print header for status output
-        sys.stdout.write("Ready! Starting control loop...\r\n\r\n")
-        sys.stdout.write(f"{'Time':<8} {'Input':<30} {'Body Vel (x/y/θ)':<25} {'Wheel Raw (L/R/B)':<25}\r\n")
-        sys.stdout.write("-" * 88 + "\r\n")
-        sys.stdout.flush()
+        print("Ready! Starting control loop...\n")
+        print(f"{'Time':<8} {'Cmd (x/y/θ)':<20} {'Obs (x/y/θ)':<20} {'Wheel Raw (L/R/B)':<20}")
+        print("-" * 68)
 
         loop_counter = 0
         control_frequency = config['control']['frequency']
@@ -273,8 +272,7 @@ def main():
 
             # Check for exit
             if exit_requested:
-                sys.stdout.write("\r\n[exit] ESC pressed, stopping...\r\n")
-                sys.stdout.flush()
+                print("\n[exit] ESC pressed, stopping...")
                 break
 
             # Convert normalized input to m/s and deg/s
@@ -289,32 +287,34 @@ def main():
                 theta_vel=theta_vel
             )
 
-            # Print status periodically
-            if loop_counter % print_interval == 0:
+            # Read actual velocities from motors (observation)
+            try:
+                obs = controller.get_observation()
+            except Exception as e:
+                logger.warning(f"Failed to read observation: {e}")
+                obs = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+
+            # Only print when there's movement (commanded or observed)
+            has_command = abs(x_vel) > 0.01 or abs(y_vel) > 0.01 or abs(theta_vel) > 0.01
+            has_motion = abs(obs["x.vel"]) > 0.01 or abs(obs["y.vel"]) > 0.01 or abs(obs["theta.vel"]) > 0.01
+
+            if (has_command or has_motion) and (loop_counter % print_interval == 0):
                 elapsed = time.time() - start_time
                 time_str = f"{elapsed:.1f}s"
 
-                # Build input string
-                input_parts = []
-                if abs(forward) > 0.01:
-                    input_parts.append(f"Fwd:{forward:+.1f}")
-                if abs(strafe) > 0.01:
-                    input_parts.append(f"Str:{strafe:+.1f}")
-                if abs(rotate) > 0.01:
-                    input_parts.append(f"Rot:{rotate:+.1f}")
-                input_str = " ".join(input_parts) if input_parts else "STOPPED"
+                # Command velocities
+                cmd_str = f"x:{x_vel:+.2f} y:{y_vel:+.2f} θ:{theta_vel:+4.0f}"
 
-                # Body velocities
-                body_str = f"x:{x_vel:+.2f} y:{y_vel:+.2f} θ:{theta_vel:+.1f}"
+                # Observed velocities
+                obs_str = f"x:{obs['x.vel']:+.2f} y:{obs['y.vel']:+.2f} θ:{obs['theta.vel']:+4.0f}"
 
-                # Wheel velocities (motor names)
+                # Wheel raw velocities
                 left_vel = wheel_velocities["base_left_wheel"]
                 right_vel = wheel_velocities["base_right_wheel"]
                 back_vel = wheel_velocities["base_back_wheel"]
                 wheel_str = f"{left_vel:+5d} {right_vel:+5d} {back_vel:+5d}"
 
-                sys.stdout.write(f"{time_str:<8} {input_str:<30} {body_str:<25} {wheel_str:<25}\r\n")
-                sys.stdout.flush()
+                print(f"{time_str:<8} {cmd_str:<20} {obs_str:<20} {wheel_str:<20}")
 
             # Maintain control frequency
             time.sleep(loop_delay)
