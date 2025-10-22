@@ -43,6 +43,7 @@ from motors2 import Motor, MotorNormMode
 from motors2.feetech import FeetechMotorsBus
 from motors2.base_controller import LeKiwiBaseController
 from motors2.keyboard_input import KeyboardInput
+from motors2.visualizer import PathVisualizer
 
 # Setup logging
 logging.basicConfig(
@@ -173,6 +174,7 @@ def main():
     parser.add_argument("--motor-right", type=int, default=None, help="Right motor ID")
     parser.add_argument("--motor-back", type=int, default=None, help="Back motor ID")
     parser.add_argument("--show-config", action="store_true", help="Show configuration and exit")
+    parser.add_argument("--no-viz", action="store_true", help="Disable real-time visualization")
     args = parser.parse_args()
 
     # Load configuration
@@ -228,6 +230,13 @@ def main():
     print("\n[init] Initializing keyboard input...")
     keyboard = KeyboardInput()
 
+    # Initialize visualizer (unless disabled)
+    visualizer = None
+    if not args.no_viz:
+        print("\n[init] Initializing real-time path visualizer...")
+        visualizer = PathVisualizer(max_history=500, update_interval=0.1)
+        print("✅ Visualization window opened")
+
     # Create Feetech motor bus (like lekiwi_base does)
     print(f"\n[init] Creating FeetechMotorsBus on {port}...")
     bus = FeetechMotorsBus(
@@ -263,9 +272,13 @@ def main():
         max_rotation = config['control']['max_rotation_degs']
 
         start_time = time.time()
+        last_loop_time = start_time
 
         while True:
             loop_counter += 1
+            current_loop_time = time.time()
+            dt = current_loop_time - last_loop_time
+            last_loop_time = current_loop_time
 
             # Read keyboard input
             forward, strafe, rotate, exit_requested = keyboard.read()
@@ -293,6 +306,11 @@ def main():
             except Exception as e:
                 logger.warning(f"Failed to read observation: {e}")
                 obs = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+
+            # Update visualizer with observation
+            if visualizer is not None:
+                visualizer.update(obs, dt)
+                visualizer.draw()
 
             # Only print when there's movement (commanded or observed)
             has_command = abs(x_vel) > 0.01 or abs(y_vel) > 0.01 or abs(theta_vel) > 0.01
@@ -344,6 +362,12 @@ def main():
                 logger.error(f"Cleanup error: {e}")
 
         keyboard.close()
+
+        # Close visualizer
+        if visualizer is not None:
+            print("[cleanup] Closing visualization window...")
+            visualizer.close()
+
         print("\n✅ Done. Motors stopped.\n")
 
 

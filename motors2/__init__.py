@@ -18,6 +18,9 @@ from .motors_bus import Motor, MotorCalibration, MotorNormMode, MotorsBus, NameO
 # Export LeKiwi controller
 from .base_controller import LeKiwiBaseController
 
+# Export visualizer
+from .visualizer import PathVisualizer
+
 __all__ = [
     # Motor classes
     "Motor",
@@ -28,4 +31,6 @@ __all__ = [
     "Value",
     # Controllers
     "LeKiwiBaseController",
+    # Visualization
+    "PathVisualizer",
 ]
