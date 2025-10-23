@@ -69,9 +69,9 @@ class ConsoleKeyboardInput:
     Enhanced keyboard input for robot control + pose adjustment.
 
     Supports:
-    - WASD+QE for robot movement
-    - Arrow keys for pose translation
-    - Comma/period for pose rotation
+    - WASD+QE for robot movement (actual robot control)
+    - IJKL for pose translation (map adjustment only)
+    - U/O for pose rotation (map adjustment only)
     - R for reset
     """
 
@@ -114,19 +114,25 @@ class ConsoleKeyboardInput:
     def _read_key_unix(self) -> str:
         """Read keypress on Unix/macOS."""
         import select
+        import time
+
         if select.select([sys.stdin], [], [], 0)[0]:
             key = sys.stdin.read(1)
-            if key == '\x1b':  # ESC sequence
-                if select.select([sys.stdin], [], [], 0.01)[0]:
+            if key == '\x1b':  # ESC key
+                # Wait briefly to see if it's part of an escape sequence
+                time.sleep(0.01)
+
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    # There are more characters - it's an escape sequence (arrow key, etc.)
+                    # Consume and ignore them
                     next_char = sys.stdin.read(1)
-                    if next_char == '[':  # Arrow key
-                        if select.select([sys.stdin], [], [], 0.01)[0]:
-                            arrow = sys.stdin.read(1)
-                            if arrow == 'A': return 'up'
-                            if arrow == 'B': return 'down'
-                            if arrow == 'C': return 'right'
-                            if arrow == 'D': return 'left'
-                    return 'esc'
+                    if next_char == '[':  # CSI sequence
+                        time.sleep(0.01)
+                        if select.select([sys.stdin], [], [], 0)[0]:
+                            sys.stdin.read(1)  # Consume the final character
+                    # Ignore all escape sequences
+                    return ''
+                # Real ESC key press (no follow-up characters)
                 return 'esc'
             return key.lower()
         return ''
@@ -175,19 +181,19 @@ class ConsoleKeyboardInput:
             elif key == ' ':
                 forward = strafe = rotate = 0.0
 
-            # Pose adjustment (arrow keys)
-            elif key == 'up':
-                pose_dy = 0.05  # 5cm
-            elif key == 'down':
-                pose_dy = -0.05
-            elif key == 'left':
-                pose_dx = -0.05
-            elif key == 'right':
-                pose_dx = 0.05
-            elif key == ',':
-                pose_dtheta = 5.0  # 5 degrees
-            elif key == '.':
-                pose_dtheta = -5.0
+            # Pose adjustment (IJKL for translation, UO for rotation)
+            elif key == 'i':
+                pose_dy = 0.05  # 5cm forward
+            elif key == 'k':
+                pose_dy = -0.05  # 5cm backward
+            elif key == 'j':
+                pose_dx = -0.05  # 5cm left
+            elif key == 'l':
+                pose_dx = 0.05  # 5cm right
+            elif key == 'u':
+                pose_dtheta = 5.0  # 5 degrees counter-clockwise
+            elif key == 'o':
+                pose_dtheta = -5.0  # 5 degrees clockwise
 
             # Reset
             elif key == 'r':
@@ -213,18 +219,25 @@ class MapVisualizer:
     Real-time map visualization with robot tracking.
     """
 
-    def __init__(self, occupancy_map: OccupancyMap, robot_width: float, robot_height: float):
+    def __init__(self, occupancy_map: OccupancyMap, robot_width: float, robot_length: float,
+                 orientation_config: dict = None):
         """
         Initialize visualizer.
 
         Args:
             occupancy_map: Loaded occupancy map
-            robot_width: Robot width in meters
-            robot_height: Robot height in meters
+            robot_width: Robot width in meters (side-to-side)
+            robot_length: Robot length in meters (front-to-back)
+            orientation_config: Orientation visualization config from xler.yaml
         """
         self.map = occupancy_map
         self.robot_width = robot_width
-        self.robot_height = robot_height
+        self.robot_length = robot_length
+
+        # Orientation configuration
+        if orientation_config is None:
+            orientation_config = {"arrow_length_ratio": 0.7}
+        self.arrow_length_ratio = orientation_config.get("arrow_length_ratio", 0.7)
 
         # Robot state (world coordinates)
         self.robot_x = 0.0
@@ -318,13 +331,15 @@ class MapVisualizer:
         sin_t = np.sin(theta_rad)
 
         # Robot corners (rotated rectangle)
-        w, h = self.robot_width, self.robot_height
+        # Width is side-to-side (X in body frame)
+        # Length is front-to-back (Y in body frame)
+        w, l = self.robot_width, self.robot_length
         corners = np.array([
-            [-w/2, -h/2],
-            [w/2, -h/2],
-            [w/2, h/2],
-            [-w/2, h/2],
-            [-w/2, -h/2],  # Close the loop
+            [-w/2, -l/2],  # Back-left
+            [w/2, -l/2],   # Back-right
+            [w/2, l/2],    # Front-right
+            [-w/2, l/2],   # Front-left
+            [-w/2, -l/2],  # Close the loop
         ])
 
         # Rotate and translate
@@ -338,7 +353,14 @@ class MapVisualizer:
         self.dynamic_patches.append(robot_poly)
 
         # Draw orientation arrow
-        arrow_len = max(self.robot_width, self.robot_height) * 0.7
+        # Arrow always points along the LENGTH direction (Y-axis in body frame)
+        # Arrow is perpendicular to the WIDTH (X-axis in body frame)
+        # Arrow length is based on width (the shorter dimension)
+        arrow_len = self.robot_width * self.arrow_length_ratio
+
+        # Arrow points along Y-axis in body frame (length direction)
+        # In body frame: Y-axis is "forward" (along length)
+        # After rotation by theta: this becomes the robot's forward direction
         dx = arrow_len * cos_t
         dy = arrow_len * sin_t
 
@@ -350,6 +372,14 @@ class MapVisualizer:
         self.ax.add_patch(orientation_arrow)
         self.dynamic_patches.append(orientation_arrow)
 
+        # Add a small marker at the front of the robot for clarity
+        front_marker_x = self.robot_x + (arrow_len * 0.4) * cos_t
+        front_marker_y = self.robot_y + (arrow_len * 0.4) * sin_t
+        front_marker = Circle((front_marker_x, front_marker_y), 0.02,
+                             color='orange', zorder=12)
+        self.ax.add_patch(front_marker)
+        self.dynamic_patches.append(front_marker)
+
         # Draw center point
         center_circle = Circle((self.robot_x, self.robot_y), 0.03,
                               color='yellow', zorder=12)
@@ -359,7 +389,7 @@ class MapVisualizer:
         # Check collision
         collision = self.map.check_robot_collision(
             self.robot_x, self.robot_y, self.robot_theta,
-            self.robot_width, self.robot_height
+            self.robot_width, self.robot_length
         )
 
         # Update info text
@@ -424,9 +454,11 @@ def main():
     # Load robot configuration
     print("\n[init] Loading robot configuration from xler.yaml...")
     robot_config = load_robot_config()
-    robot_width = robot_config['width'] / 1000.0  # mm to m
-    robot_height = robot_config['height'] / 1000.0  # mm to m
-    print(f"[init] Robot dimensions: {robot_width}m x {robot_height}m")
+    robot_width = robot_config['width']    # Already in meters
+    robot_length = robot_config['length']  # Already in meters
+    print(f"[init] Robot dimensions: {robot_width}m (width) x {robot_length}m (length)")
+    orientation_config = robot_config.get("orientation", {"arrow_length_ratio": 0.7})
+    print(f"[init] Arrow points along width direction (perpendicular to length)")
 
     # Load map
     print(f"\n[init] Loading occupancy map from {args.map}...")
@@ -434,7 +466,7 @@ def main():
 
     # Initialize visualizer
     print("\n[init] Initializing map visualizer...")
-    visualizer = MapVisualizer(occupancy_map, robot_width, robot_height)
+    visualizer = MapVisualizer(occupancy_map, robot_width, robot_length, robot_config.get("orientation", {}))
     visualizer.update_robot_pose(args.init_x, args.init_y, args.init_theta)
     visualizer.draw()
     print(" Map visualization ready")
@@ -502,9 +534,10 @@ def main():
     print("  READY!")
     print("="*70)
     print("\n<� Controls:")
-    print("  Movement:  W/A/S/D (move) + Q/E (rotate) + SPACE (stop)")
-    print("  Pose Adj:  Arrow keys (translate) + ,/. (rotate) + R (reset)")
-    print("  Exit:      ESC")
+    print("  Robot Move:  W/A/S/D (forward/left/back/right) + Q/E (rotate) + SPACE (stop)")
+    print("  Pose Adjust: I/K (fwd/back) + J/L (left/right) + U/O (rotate) + R (reset)")
+    print("  Exit:        ESC")
+    print("\n💡 Note: WASD moves the actual robot, IJKL/UO adjusts pose on map only")
     print("="*70 + "\n")
 
     # Control loop
@@ -588,7 +621,7 @@ def main():
 
                 # Check collision before updating
                 collision = occupancy_map.check_robot_collision(
-                    new_x, new_y, new_theta, robot_width, robot_height
+                    new_x, new_y, new_theta, robot_width, robot_length
                 )
 
                 if not collision:

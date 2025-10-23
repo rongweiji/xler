@@ -1,2 +1,13 @@
-width: 400 # 400mm
-height: 300 # 300mm
+# Robot dimensions (2D footprint in meters)
+# NOTE: Arrow points along the SHORTER dimension
+# The LONGER dimension is the "front" of the robot
+width: 0.3    # 0.3m = 300mm (shorter side, arrow points this way)
+length: 0.4   # 0.4m = 400mm (longer side, this is the front)
+
+# Robot orientation visualization
+# The arrow shows the forward direction of the robot
+# Arrow is ALWAYS perpendicular to the LONGER side (length)
+# Arrow is ALWAYS parallel to the SHORTER side (width)
+# This means: the length side defines the "front" of the robot
+orientation:
+  arrow_length_ratio: 0.7    # Arrow length as ratio of width (0.5-1.0)
