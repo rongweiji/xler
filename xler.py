@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import yaml
 
 # Import from motors2 (self-contained package)
-from motors2 import Motor, MotorNormMode
+from motors2 import Motor, MotorNormMode, find_serial_port
 from motors2.feetech import FeetechMotorsBus
 from motors2.base_controller import LeKiwiBaseController
 from motors2.keyboard_input import KeyboardInput
@@ -108,43 +108,6 @@ def print_config(config: dict):
     print(f"  Max Speed: {config['control']['max_speed_ms']} m/s")
     print(f"  Max Rotation: {config['control']['max_rotation_degs']} deg/s")
     print("="*60 + "\n")
-
-
-def find_serial_port():
-    """
-    Auto-detect serial port for USB-to-Serial adapter.
-
-    Returns:
-        str: Detected port path, or None if not found
-    """
-    system = platform.system()
-
-    if system == "Darwin":  # macOS
-        patterns = [
-            "/dev/cu.usbserial*",
-            "/dev/cu.SLAB_USBtoUART*",
-            "/dev/cu.wchusbserial*",
-            "/dev/cu.usbmodem*",
-        ]
-        for pattern in patterns:
-            ports = glob.glob(pattern)
-            if ports:
-                return ports[0]
-
-    elif system == "Linux":
-        patterns = ["/dev/ttyUSB*", "/dev/ttyACM*"]
-        for pattern in patterns:
-            ports = glob.glob(pattern)
-            if ports:
-                return ports[0]
-
-    elif system == "Windows":
-        import serial.tools.list_ports
-        ports = list(serial.tools.list_ports.comports())
-        if ports:
-            return ports[0].device
-
-    return None
 
 
 def print_banner():
