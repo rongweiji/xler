@@ -151,6 +151,8 @@ status_services() {
   done
 }
 
+echo "Running action: $ACTION, you also can run: sudo bash $0 [install|start|stop|restart|status]"
+
 case "$ACTION" in
   install) install_mjpg_streamer ;;
   start)   start_services ;;
