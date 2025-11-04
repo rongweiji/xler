@@ -11,6 +11,6 @@ numpy>=1.24,<2.0
 # Optional: DualSense PS5 controller support (for motors/ package)
 pydualsense>=0.7.0
 
-# Optional: Computer vision and scientific computing
+# Optional: Computer vision utilities
 opencv-python>=4.5.0
 
