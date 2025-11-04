@@ -18,9 +18,6 @@ from .motors_bus import Motor, MotorCalibration, MotorNormMode, MotorsBus, NameO
 # Export LeKiwi controller
 from .base_controller import LeKiwiBaseController
 
-# Export visualizer
-from .visualizer import PathVisualizer
-
 # Export hardware utilities
 from .hardware_utils import find_serial_port, list_serial_ports
 
@@ -34,8 +31,6 @@ __all__ = [
     "Value",
     # Controllers
     "LeKiwiBaseController",
-    # Visualization
-    "PathVisualizer",
     # Hardware utilities
     "find_serial_port",
     "list_serial_ports",
