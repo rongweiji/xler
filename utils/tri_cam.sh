@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========= Config =========
+# ========= User Config =========
 FRAMERATE=30
 RESOLUTION="1280x720"
-CAMS=("/dev/video0" "/dev/video1" "/dev/video3")
-NAMES=("cam0" "cam1" "cam3")
-PORTS=(8080 8081 8083)
+CAMS=("/dev/video1" "/dev/video3")  # adjust with v4l2-ctl --list-devices
+PORTS=(8081 8083)
 INSTALL_DIR="/opt/mjpg-streamer"
 BIN="$INSTALL_DIR/mjpg-streamer-experimental/mjpg_streamer"
 WWW="$INSTALL_DIR/mjpg-streamer-experimental/www"
 WEB_ROOT="/var/www/html/mjpeg"
-# ==========================
+PLUGIN_DIR="$INSTALL_DIR/mjpg-streamer-experimental"
+LD_PATH="$PLUGIN_DIR/plugins/input_uvc:$PLUGIN_DIR/plugins/output_http:$PLUGIN_DIR"
+# =================================
 
 if [[ $EUID -ne 0 ]]; then
-  echo "Please run as root: sudo bash $0 [start|stop|restart|status|install]"
+  echo "Please run as root: sudo bash $0 [install|start|stop|status]"
   exit 1
 fi
 
-ACTION="${1:-install}" # default action is install
+ACTION="${1:-install}"
 
 wait_for_apt() {
   echo "[*] Checking for apt/dpkg lock..."
@@ -32,31 +33,6 @@ wait_for_apt() {
   done
 }
 
-create_services() {
-  for i in "${!CAMS[@]}"; do
-    NAME="${NAMES[$i]}"
-    DEV="${CAMS[$i]}"
-    PORT="${PORTS[$i]}"
-    cat > "/etc/systemd/system/mjpg-streamer-${NAME}.service" <<SERVICE
-[Unit]
-Description=mjpg-streamer (${NAME} on ${DEV})
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=$BIN -i "input_uvc.so -d ${DEV} -r ${RESOLUTION} -f ${FRAMERATE}" -o "output_http.so -p ${PORT} -w ${WWW}"
-Restart=always
-RestartSec=2
-User=root
-WorkingDirectory=$(dirname "$BIN")
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-  done
-  systemctl daemon-reload
-}
-
 install_mjpg_streamer() {
   wait_for_apt
   apt-get update
@@ -64,7 +40,15 @@ install_mjpg_streamer() {
 
   if [[ ! -d "$INSTALL_DIR" ]]; then
     git clone https://github.com/jacksonliam/mjpg-streamer.git "$INSTALL_DIR"
-    make -C "$INSTALL_DIR/mjpg-streamer-experimental"
+  fi
+
+  make -C "$PLUGIN_DIR"
+
+  INPUT_PLUGIN="$PLUGIN_DIR/plugins/input_uvc/input_uvc.so"
+  OUTPUT_PLUGIN="$PLUGIN_DIR/plugins/output_http/output_http.so"
+  if [[ ! -f "$INPUT_PLUGIN" ]] || [[ ! -f "$OUTPUT_PLUGIN" ]]; then
+    echo "Plugin build failed; check $PLUGIN_DIR/plugins"
+    exit 1
   fi
 
   mkdir -p "$WEB_ROOT"
@@ -73,7 +57,7 @@ install_mjpg_streamer() {
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Raspberry Pi — 3-Camera MJPEG</title>
+  <title>Raspberry Pi — Dual Camera MJPEG</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: system-ui; background:#0b1015; color:#e6eef7; margin:0; padding:1rem; }
@@ -86,78 +70,90 @@ install_mjpg_streamer() {
   </style>
 </head>
 <body>
-  <h1>Raspberry Pi — 3-Camera MJPEG</h1>
+  <h1>Raspberry Pi — Dual Camera MJPEG</h1>
   <div class="grid">
-    <div class="card"><p class="title">cam0</p><img id="img0"><div class="hint" id="h0"></div></div>
-    <div class="card"><p class="title">cam1</p><img id="img1"><div class="hint" id="h1"></div></div>
-    <div class="card"><p class="title">cam3</p><img id="img3"><div class="hint" id="h3"></div></div>
+    <div class="card"><p class="title">cam_left</p><img id="img0"><div class="hint" id="h0"></div></div>
+    <div class="card"><p class="title">cam_right</p><img id="img1"><div class="hint" id="h1"></div></div>
   </div>
   <script>
     const host = location.hostname || 'localhost';
-    const ports = { img0:8080, img1:8081, img3:8083 };
-    for (const [id,port] of Object.entries(ports)) {
+    const ports = [8081, 8083];
+    ports.forEach((port, idx) => {
       const url = `http://${host}:${port}/?action=stream`;
-      document.getElementById(id).src = url;
-      document.getElementById('h'+id.slice(-1)).textContent = url;
-    }
+      document.getElementById(`img${idx}`).src = url;
+      document.getElementById(`h${idx}`).textContent = url;
+    });
   </script>
 </body>
 </html>
 HTML
 
-  create_services
+  systemctl enable --now nginx || true
 
-  systemctl enable --now nginx
-  for n in "${NAMES[@]}"; do
-    systemctl enable --now "mjpg-streamer-${n}.service"
+  cat <<EOF
+==============================================
+Installation complete.
+- Start streaming : sudo bash $0 start
+- Stop streaming  : Ctrl+C in that terminal
+==============================================
+EOF
+}
+
+start_streaming() {
+  if [[ ! -x "$BIN" ]]; then
+    echo "mjpg-streamer binary not found at $BIN"
+    echo "Run: sudo $0 install"
+    exit 1
+  fi
+
+  declare -a pids=()
+
+  cleanup() {
+    echo
+    echo "[cleanup] Stopping mjpg-streamer processes..."
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+      fi
+    done
+    echo "Streams stopped."
+  }
+
+  trap cleanup INT TERM
+
+  mkdir -p "$WEB_ROOT"
+
+  for idx in "${!CAMS[@]}"; do
+    DEV="${CAMS[$idx]}"
+    PORT="${PORTS[$idx]}"
+
+    CMD=(
+      "$BIN"
+      -i "input_uvc.so -d ${DEV} -r ${RESOLUTION} -f ${FRAMERATE}"
+      -o "output_http.so -p ${PORT} -w ${WWW}"
+    )
+
+    echo "[start] ${DEV} on port ${PORT}"
+    env LD_LIBRARY_PATH="$LD_PATH" "${CMD[@]}" &
+    pids+=($!)
   done
 
   IP=$(hostname -I | awk '{print $1}')
   echo
-  echo "=============================================="
-  echo "MJPEG server installed and started!"
-  echo "Open: http://${IP}/mjpeg/"
-  for i in "${!NAMES[@]}"; do
-    echo "  ${NAMES[$i]}: http://${IP}:${PORTS[$i]}/?action=stream"
+  echo "Streams available at:"
+  for idx in "${!CAMS[@]}"; do
+    echo "  ${CAMS[$idx]} -> http://${IP}:${PORTS[$idx]}/?action=stream"
   done
-  echo "=============================================="
-}
+  echo "Press Ctrl+C to stop."
+  echo
 
-start_services() {
-  for n in "${NAMES[@]}"; do
-    systemctl start "mjpg-streamer-${n}.service" || true
-  done
-  echo "MJPEG streams started."
+  wait "${pids[@]}"
 }
-
-stop_services() {
-  for n in "${NAMES[@]}"; do
-    systemctl stop "mjpg-streamer-${n}.service" || true
-  done
-  echo "MJPEG streams stopped."
-}
-
-restart_services() {
-  for n in "${NAMES[@]}"; do
-    systemctl restart "mjpg-streamer-${n}.service" || true
-  done
-  echo "MJPEG streams restarted."
-}
-
-status_services() {
-  for n in "${NAMES[@]}"; do
-    echo "---- ${n} ----"
-    systemctl --no-pager --full status "mjpg-streamer-${n}.service" | grep -E "Active:|ExecStart=" || true
-  done
-}
-
-echo "Running action: $ACTION, you also can run: sudo bash $0 [install|start|stop|restart|status]"
 
 case "$ACTION" in
   install) install_mjpg_streamer ;;
-  start)   start_services ;;
-  stop)    stop_services ;;
-  restart) restart_services ;;
-  status)  status_services ;;
-  *) echo "Usage: sudo bash $0 [install|start|stop|restart|status]" ;;
+  start)   start_streaming ;;
+  status)  pgrep -f "$BIN" >/dev/null && echo "mjpg-streamer running." || echo "No mjpg-streamer process running." ;;
+  *) echo "Usage: sudo bash $0 [install|start|status]" ;;
 esac
