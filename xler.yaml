@@ -11,3 +11,15 @@ length: 0.4   # 0.4m = 400mm (longer side, this is the front)
 # This means: the length side defines the "front" of the robot
 orientation:
   arrow_length_ratio: 0.7    # Arrow length as ratio of width (0.5-1.0)
+
+# Stereo camera recording configuration
+camera:
+  enabled: false              # Set to true to record during control sessions
+  frame_interval: 20          # Capture every N control loop iterations
+  output_dir: recordings      # Root directory for saved images
+  left:
+    device: /dev/video1
+    folder: front_stereo_cam_left
+  right:
+    device: /dev/video3
+    folder: front_stereo_cam_right

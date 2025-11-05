@@ -30,6 +30,16 @@ python xler.py
 - Optional overrides: `--speed`, `--motor-left`, `--motor-right`, `--motor-back`.
 - Terminal-only telemetry shows commanded vs observed motion whenever the robot moves.
 
+## Stereo Camera Recording (Optional)
+- Set up devices in `xler.yaml` under the `camera` section (e.g. `/dev/video1` and `/dev/video3`) and define the output folders you want to use.
+- Enable recording via CLI with:
+  ```bash
+  python xler.py --record-cameras
+  ```
+  or flip `camera.enabled` to `true` in `xler.yaml`.
+- Adjust capture cadence with `--camera-frame-interval` (default 20 control loops per frame) and override device/output paths via `--camera-left`, `--camera-right`, or `--camera-output-dir`.
+- Frames are saved as JPEGs with EXIF timestamps in `recordings/front_stereo_cam_left` and `recordings/front_stereo_cam_right`.
+
 ## Camera Helper Script (Optional)
 To stream three USB cameras via MJPEG:
 ```bash

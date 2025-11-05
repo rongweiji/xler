@@ -44,6 +44,8 @@ from motors2.feetech import FeetechMotorsBus
 from motors2.base_controller import LeKiwiBaseController
 from motors2.keyboard_input import KeyboardInput
 
+from camera_recorder import StereoCameraRecorder
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -79,6 +81,15 @@ def load_config(config_path: str = "motors2/config.yaml", **overrides) -> dict:
         config['control']['max_speed_ms'] = overrides['max_speed']
 
     return config
+
+
+def load_app_settings(settings_path: str = "xler.yaml") -> dict:
+    """Load auxiliary application settings (camera, orientation, etc.)."""
+    path = Path(settings_path)
+    if not path.exists():
+        return {}
+    with open(path, 'r') as f:
+        return yaml.safe_load(f) or {}
 
 
 def print_config(config: dict):
@@ -136,6 +147,11 @@ def main():
     parser.add_argument("--motor-right", type=int, default=None, help="Right motor ID")
     parser.add_argument("--motor-back", type=int, default=None, help="Back motor ID")
     parser.add_argument("--show-config", action="store_true", help="Show configuration and exit")
+    parser.add_argument("--record-cameras", action="store_true", help="Enable stereo camera recording")
+    parser.add_argument("--camera-left", type=str, default=None, help="Left camera device path (e.g. /dev/video1)")
+    parser.add_argument("--camera-right", type=str, default=None, help="Right camera device path (e.g. /dev/video3)")
+    parser.add_argument("--camera-frame-interval", type=int, default=None, help="Frames between captures (default: 20)")
+    parser.add_argument("--camera-output-dir", type=str, default=None, help="Root directory for captured images")
     args = parser.parse_args()
 
     # Load configuration
@@ -147,6 +163,8 @@ def main():
         max_speed=args.speed,
         port=args.port
     )
+    app_settings = load_app_settings()
+    camera_settings = app_settings.get("camera", {})
 
     # Show config and exit if requested
     if args.show_config:
@@ -190,6 +208,46 @@ def main():
     # Initialize keyboard input
     print("\n[init] Initializing keyboard input...")
     keyboard = KeyboardInput()
+
+    # Configure optional stereo camera recording
+    recorder = None
+    record_cameras = args.record_cameras or camera_settings.get("enabled", False)
+    if record_cameras:
+        left_cfg = camera_settings.get("left", {})
+        right_cfg = camera_settings.get("right", {})
+        left_device = args.camera_left or left_cfg.get("device")
+        right_device = args.camera_right or right_cfg.get("device")
+        frame_interval = args.camera_frame_interval or camera_settings.get("frame_interval", 20)
+        output_dir = args.camera_output_dir or camera_settings.get("output_dir", "recordings")
+        left_folder = left_cfg.get("folder", "front_stereo_cam_left")
+        right_folder = right_cfg.get("folder", "front_stereo_cam_right")
+
+        if not left_device or not right_device:
+            logger.error("Camera recording requested but device paths are missing. "
+                         "Check xler.yaml or provide --camera-left/--camera-right.")
+            record_cameras = False
+        else:
+            try:
+                recorder = StereoCameraRecorder(
+                    left_device=left_device,
+                    right_device=right_device,
+                    frame_interval=frame_interval,
+                    output_root=output_dir,
+                    left_folder=left_folder,
+                    right_folder=right_folder,
+                )
+                recorder.start()
+                logger.info(
+                    "Stereo recording enabled: left=%s right=%s interval=%s output=%s",
+                    left_device,
+                    right_device,
+                    frame_interval,
+                    output_dir,
+                )
+            except Exception as exc:
+                logger.error("Failed to initialize camera recorder: %s", exc)
+                recorder = None
+                record_cameras = False
 
     # Create Feetech motor bus (like lekiwi_base does)
     print(f"\n[init] Creating FeetechMotorsBus on {port}...")
@@ -261,6 +319,10 @@ def main():
                 logger.warning(f"Failed to read observation: {e}")
                 obs = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
+            # Capture stereo frames if requested
+            if recorder is not None:
+                recorder.maybe_capture(loop_counter, current_loop_time)
+
             # Only print when there's movement (commanded or observed)
             has_command = abs(x_vel) > 0.01 or abs(y_vel) > 0.01 or abs(theta_vel) > 0.01
             has_motion = abs(obs["x.vel"]) > 0.01 or abs(obs["y.vel"]) > 0.01 or abs(obs["theta.vel"]) > 0.01
@@ -309,6 +371,10 @@ def main():
                 bus.disconnect()
             except Exception as e:
                 logger.error(f"Cleanup error: {e}")
+
+        if recorder is not None:
+            print("[cleanup] Stopping camera recorder...")
+            recorder.stop()
 
         keyboard.close()
 

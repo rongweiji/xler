@@ -13,4 +13,5 @@ pydualsense>=0.7.0
 
 # Optional: Computer vision utilities
 opencv-python>=4.5.0
+Pillow>=9.0
 
