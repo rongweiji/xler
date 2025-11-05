@@ -17,6 +17,9 @@ camera:
   enabled: false              # Set to true to record during control sessions
   frame_interval: 20          # Capture every N control loop iterations
   output_dir: recordings      # Root directory for saved images
+  resolution: "1280x720"      # Capture resolution (WIDTHxHEIGHT)
+  fps: 30                     # Frame rate to request from camera
+  pixel_format: mjpeg         # mjpeg, yuyv, etc.
   left:
     device: /dev/video1
     folder: front_stereo_cam_left

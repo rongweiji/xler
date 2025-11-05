@@ -221,6 +221,9 @@ def main():
         output_dir = args.camera_output_dir or camera_settings.get("output_dir", "recordings")
         left_folder = left_cfg.get("folder", "front_stereo_cam_left")
         right_folder = right_cfg.get("folder", "front_stereo_cam_right")
+        resolution = camera_settings.get("resolution", "1280x720")
+        fps = camera_settings.get("fps", 30)
+        pixel_format = camera_settings.get("pixel_format", "mjpeg")
 
         if not left_device or not right_device:
             logger.error("Camera recording requested but device paths are missing. "
@@ -235,14 +238,20 @@ def main():
                     output_root=output_dir,
                     left_folder=left_folder,
                     right_folder=right_folder,
+                    resolution=resolution,
+                    fps=fps,
+                    pixel_format=pixel_format,
                 )
                 recorder.start()
                 logger.info(
-                    "Stereo recording enabled: left=%s right=%s interval=%s output=%s",
+                    "Stereo recording enabled: left=%s right=%s interval=%s output=%s res=%s fps=%s fmt=%s",
                     left_device,
                     right_device,
                     frame_interval,
                     output_dir,
+                    resolution,
+                    fps,
+                    pixel_format,
                 )
             except Exception as exc:
                 logger.error("Failed to initialize camera recorder: %s", exc)

@@ -38,6 +38,7 @@ python xler.py
   ```
   or flip `camera.enabled` to `true` in `xler.yaml`.
 - Adjust capture cadence with `--camera-frame-interval` (default 20 control loops per frame) and override device/output paths via `--camera-left`, `--camera-right`, or `--camera-output-dir`.
+- Control resolution/FPS/pixel format via `camera.resolution`, `camera.fps`, and `camera.pixel_format` in `xler.yaml` (defaults: `1280x720`, `30`, `mjpeg`).
 - Frames are saved as JPEGs with EXIF timestamps in `recordings/front_stereo_cam_left` and `recordings/front_stereo_cam_right`.
 
 ## Camera Helper Script (Optional)

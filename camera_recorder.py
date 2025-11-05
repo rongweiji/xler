@@ -15,7 +15,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Tuple
 
 try:  # OpenCV is required for grabbing frames
     import cv2  # type: ignore
@@ -46,6 +46,9 @@ class StereoCameraRecorder:
         output_root: Path | str = Path("recordings"),
         left_folder: str = "front_stereo_cam_left",
         right_folder: str = "front_stereo_cam_right",
+        resolution: str | Tuple[int, int] = "1280x720",
+        fps: int = 30,
+        pixel_format: str = "mjpeg",
     ) -> None:
         if cv2 is None:
             raise RuntimeError(
@@ -64,6 +67,9 @@ class StereoCameraRecorder:
         self.output_root = Path(output_root)
         self.left_folder = left_folder
         self.right_folder = right_folder
+        self.resolution = self._parse_resolution(resolution)
+        self.fps = fps
+        self.pixel_format = pixel_format.lower()
 
         self._lock = threading.Lock()
         self._left_capture: Optional[cv2.VideoCapture] = None
@@ -147,6 +153,20 @@ class StereoCameraRecorder:
             return False, None
         return capture.read()
 
+    def _parse_resolution(self, value: str | Tuple[int, int]) -> Tuple[int, int]:
+        if isinstance(value, tuple):
+            return value
+        match = re.match(r"(\d+)[xX](\d+)", str(value))
+        if not match:
+            raise ValueError(f"Invalid resolution format: {value}")
+        return int(match.group(1)), int(match.group(2))
+
+    def _configure_capture(self, capture: cv2.VideoCapture) -> None:
+        width, height = self.resolution
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        capture.set(cv2.CAP_PROP_FPS, float(self.fps))
+
     def _open_capture(self, device) -> cv2.VideoCapture:
         """
         Try several backend combinations to open a V4L2 device.
@@ -154,23 +174,69 @@ class StereoCameraRecorder:
         Supports both numeric indices and explicit /dev/video paths.
         """
         attempts = []
+        width, height = self.resolution
         if isinstance(device, int):
-            attempts.extend([(device, cv2.CAP_V4L2), (device, cv2.CAP_ANY)])
+            attempts.extend([
+                (device, cv2.CAP_V4L2),
+                (device, cv2.CAP_ANY),
+                (device, None),
+            ])
         else:
             device_str = str(device)
-            attempts.extend([(device_str, cv2.CAP_V4L2), (device_str, cv2.CAP_ANY)])
+            attempts.extend([
+                (device_str, cv2.CAP_V4L2),
+                (device_str, cv2.CAP_ANY),
+                (device_str, None),
+            ])
             match = re.match(r".*?/dev/video(\d+)$", device_str)
             if match:
                 idx = int(match.group(1))
-                attempts.extend([(idx, cv2.CAP_V4L2), (idx, cv2.CAP_ANY)])
+                attempts.extend([
+                    (idx, cv2.CAP_V4L2),
+                    (idx, cv2.CAP_ANY),
+                    (idx, None),
+                ])
+            # Optional gstreamer pipeline attempt
+            pipeline = (
+                f"v4l2src device={device_str} ! "
+                f"{self._gstreamer_caps()} ! "
+                "videoconvert ! "
+                "video/x-raw,format=BGR ! appsink"
+            )
+            attempts.append((pipeline, cv2.CAP_GSTREAMER))
 
         for source, backend in attempts:
-            capture = cv2.VideoCapture(source, backend)
+            try:
+                if backend is None:
+                    capture = cv2.VideoCapture(source)
+                else:
+                    capture = cv2.VideoCapture(source, backend)
+            except cv2.error:
+                continue
             if capture.isOpened():
+                self._configure_capture(capture)
                 return capture
             capture.release()
 
         raise RuntimeError(f"Unable to open camera device '{device}' with V4L2 or default backend.")
+
+    def _gstreamer_caps(self) -> str:
+        width, height = self.resolution
+        if self.pixel_format in {"mjpeg", "jpeg"}:
+            return (
+                f"image/jpeg,width={width},height={height},"
+                f"framerate={self.fps}/1 ! jpegdec"
+            )
+        if self.pixel_format in {"yuyv", "yuy2"}:
+            return (
+                f"video/x-raw,format=YUY2,width={width},height={height},"
+                f"framerate={self.fps}/1"
+            )
+        # Default raw format
+        return (
+            f"video/x-raw,width={width},height={height},"
+            f"framerate={self.fps}/1"
+        )
 
     def _save_pair(
         self,
