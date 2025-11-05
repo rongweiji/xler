@@ -11,7 +11,6 @@ BIN="$INSTALL_DIR/mjpg-streamer-experimental/mjpg_streamer"
 WWW="$INSTALL_DIR/mjpg-streamer-experimental/www"
 WEB_ROOT="/var/www/html/mjpeg"
 PLUGIN_DIR="$INSTALL_DIR/mjpg-streamer-experimental"
-LD_PATH="$PLUGIN_DIR/plugins/input_uvc:$PLUGIN_DIR/plugins/output_http:$PLUGIN_DIR"
 # =================================
 
 if [[ $EUID -ne 0 ]]; then
@@ -44,10 +43,11 @@ install_mjpg_streamer() {
 
   make -C "$PLUGIN_DIR"
 
-  INPUT_PLUGIN="$PLUGIN_DIR/plugins/input_uvc/input_uvc.so"
-  OUTPUT_PLUGIN="$PLUGIN_DIR/plugins/output_http/output_http.so"
-  if [[ ! -f "$INPUT_PLUGIN" ]] || [[ ! -f "$OUTPUT_PLUGIN" ]]; then
-    echo "Plugin build failed; check $PLUGIN_DIR/plugins"
+  INPUT_PLUGIN=$(find "$PLUGIN_DIR" -maxdepth 2 -name input_uvc.so | head -n1 || true)
+  OUTPUT_PLUGIN=$(find "$PLUGIN_DIR" -maxdepth 2 -name output_http.so | head -n1 || true)
+
+  if [[ -z "$INPUT_PLUGIN" ]] || [[ -z "$OUTPUT_PLUGIN" ]]; then
+    echo "Plugin build failed; could not locate input_uvc/output_http."
     exit 1
   fi
 
@@ -105,8 +105,16 @@ start_streaming() {
     echo "Run: sudo $0 install"
     exit 1
   fi
-
+  INPUT_PLUGIN=$(find "$PLUGIN_DIR" -maxdepth 2 -name input_uvc.so | head -n1 || true)
+  OUTPUT_PLUGIN=$(find "$PLUGIN_DIR" -maxdepth 2 -name output_http.so | head -n1 || true)
+  if [[ -z "$INPUT_PLUGIN" ]] || [[ -z "$OUTPUT_PLUGIN" ]]; then
+    echo "Required plugins missing. Run install first."
+    exit 1
+  fi
   declare -a pids=()
+  LD_PATH="$(dirname "$INPUT_PLUGIN")"
+  LD_PATH+=":$(dirname "$OUTPUT_PLUGIN")"
+  LD_PATH+=":$PLUGIN_DIR"
 
   cleanup() {
     echo
