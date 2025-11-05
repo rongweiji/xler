@@ -10,6 +10,7 @@ in the EXIF metadata when supported by Pillow.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -81,8 +82,8 @@ class StereoCameraRecorder:
             self.left_path.mkdir(parents=True, exist_ok=True)
             self.right_path.mkdir(parents=True, exist_ok=True)
 
-            self._left_capture = cv2.VideoCapture(self.left_device, cv2.CAP_V4L2)
-            self._right_capture = cv2.VideoCapture(self.right_device, cv2.CAP_V4L2)
+            self._left_capture = self._open_capture(self.left_device)
+            self._right_capture = self._open_capture(self.right_device)
 
             if not self._left_capture.isOpened():
                 raise RuntimeError(f"Failed to open left camera device '{self.left_device}'")
@@ -145,6 +146,31 @@ class StereoCameraRecorder:
         if capture is None:
             return False, None
         return capture.read()
+
+    def _open_capture(self, device) -> cv2.VideoCapture:
+        """
+        Try several backend combinations to open a V4L2 device.
+
+        Supports both numeric indices and explicit /dev/video paths.
+        """
+        attempts = []
+        if isinstance(device, int):
+            attempts.extend([(device, cv2.CAP_V4L2), (device, cv2.CAP_ANY)])
+        else:
+            device_str = str(device)
+            attempts.extend([(device_str, cv2.CAP_V4L2), (device_str, cv2.CAP_ANY)])
+            match = re.match(r".*?/dev/video(\d+)$", device_str)
+            if match:
+                idx = int(match.group(1))
+                attempts.extend([(idx, cv2.CAP_V4L2), (idx, cv2.CAP_ANY)])
+
+        for source, backend in attempts:
+            capture = cv2.VideoCapture(source, backend)
+            if capture.isOpened():
+                return capture
+            capture.release()
+
+        raise RuntimeError(f"Unable to open camera device '{device}' with V4L2 or default backend.")
 
     def _save_pair(
         self,
