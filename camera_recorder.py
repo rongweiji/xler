@@ -10,6 +10,7 @@ in the EXIF metadata when supported by Pillow.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -72,10 +73,15 @@ class StereoCameraRecorder:
         self.pixel_format = pixel_format.lower()
 
         self._lock = threading.Lock()
-        self._left_capture: Optional[cv2.VideoCapture] = None
-        self._right_capture: Optional[cv2.VideoCapture] = None
+        self._left_capture: Optional["cv2.VideoCapture"] = None
+        self._right_capture: Optional["cv2.VideoCapture"] = None
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="xler_cam")
         self._started = False
+
+        # Monotonic image counter and metadata mapping
+        self._frame_counter = 0
+        self._metadata_path: Optional[Path] = None
+        self._metadata: dict[str, dict[str, int]] = {}
 
     def start(self) -> None:
         """Open camera devices and prepare output directories."""
@@ -87,6 +93,28 @@ class StereoCameraRecorder:
             self.right_path = self.output_root / self.right_folder
             self.left_path.mkdir(parents=True, exist_ok=True)
             self.right_path.mkdir(parents=True, exist_ok=True)
+
+            # JSON mapping file in recordings root
+            self._metadata_path = self.output_root / "frames_meta.json"
+            if self._metadata_path.exists():
+                try:
+                    with self._metadata_path.open("r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    if isinstance(existing, dict):
+                        self._metadata = existing  # type: ignore[assignment]
+                        # Continue numbering from the max existing index (filenames as 7-digit numbers)
+                        try:
+                            max_id = max(int(name.split(".")[0]) for name in self._metadata.keys())
+                        except ValueError:
+                            max_id = 0
+                        self._frame_counter = max_id
+                except (json.JSONDecodeError, OSError):
+                    # If corrupt, start fresh
+                    self._metadata = {}
+                    self._frame_counter = 0
+            else:
+                self._metadata = {}
+                self._frame_counter = 0
 
             self._left_capture = self._open_capture(self.left_device)
             self._right_capture = self._open_capture(self.right_device)
@@ -113,6 +141,15 @@ class StereoCameraRecorder:
                 self._right_capture = None
 
             self._executor.shutdown(wait=True, cancel_futures=False)
+
+            # Persist metadata mapping if available
+            if self._metadata_path is not None:
+                try:
+                    with self._metadata_path.open("w", encoding="utf-8") as f:
+                        json.dump(self._metadata, f, indent=2, sort_keys=True)
+                except OSError:
+                    pass
+
             self._started = False
 
     def maybe_capture(self, frame_index: int, timestamp: float) -> None:
@@ -138,7 +175,10 @@ class StereoCameraRecorder:
         if not ret_right or frame_right is None:
             return
 
-        frame_id = int(timestamp * 1000)
+        # Use a monotonic 7-digit counter for filenames
+        with self._lock:
+            self._frame_counter += 1
+            frame_id = self._frame_counter
         self._executor.submit(
             self._save_pair,
             frame_left,
@@ -148,7 +188,7 @@ class StereoCameraRecorder:
             frame_id,
         )
 
-    def _read_frame(self, capture: Optional[cv2.VideoCapture]) -> tuple[bool, Optional[Any]]:
+    def _read_frame(self, capture: Optional["cv2.VideoCapture"]) -> tuple[bool, Optional[Any]]:
         if capture is None:
             return False, None
         return capture.read()
@@ -161,13 +201,13 @@ class StereoCameraRecorder:
             raise ValueError(f"Invalid resolution format: {value}")
         return int(match.group(1)), int(match.group(2))
 
-    def _configure_capture(self, capture: cv2.VideoCapture) -> None:
+    def _configure_capture(self, capture: "cv2.VideoCapture") -> None:
         width, height = self.resolution
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         capture.set(cv2.CAP_PROP_FPS, float(self.fps))
 
-    def _open_capture(self, device) -> cv2.VideoCapture:
+    def _open_capture(self, device) -> "cv2.VideoCapture":
         """
         Try several backend combinations to open a V4L2 device.
 
@@ -250,9 +290,8 @@ class StereoCameraRecorder:
         # Convert BGR (OpenCV) to RGB for Pillow
         image_left = Image.fromarray(cv2.cvtColor(frame_left, cv2.COLOR_BGR2RGB))
         image_right = Image.fromarray(cv2.cvtColor(frame_right, cv2.COLOR_BGR2RGB))
-
-        filename = time.strftime("%Y%m%d_%H%M%S", time.localtime(timestamp))
-        filename = f"{filename}_{frame_id}"
+        # Zero-padded 7-digit index
+        filename = f"{frame_id:07d}"
 
         left_path = self.left_path / f"{filename}.jpg"
         right_path = self.right_path / f"{filename}.jpg"
@@ -260,7 +299,17 @@ class StereoCameraRecorder:
         self._save_jpeg(image_left, left_path, timestamp)
         self._save_jpeg(image_right, right_path, timestamp)
 
-    def _save_jpeg(self, image: Image.Image, path: Path, timestamp: float) -> None:
+        # Record mapping in memory (timestamp in nanoseconds)
+        ts_ns = int(timestamp * 1_000_000_000)
+        with self._lock:
+            # One entry per filename; we rely on identical basenames for left/right
+            if self._metadata is not None:
+                self._metadata[f"{filename}.jpg"] = {
+                    "timestamp_ns": ts_ns,
+                    "frame_index": frame_index,
+                }
+
+    def _save_jpeg(self, image: "Image.Image", path: Path, timestamp: float) -> None:
         save_kwargs = {"format": "JPEG", "quality": 95}
         if hasattr(image, "getexif"):
             exif = image.getexif()

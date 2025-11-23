@@ -41,6 +41,37 @@ python xler.py
 - Control resolution/FPS/pixel format via `camera.resolution`, `camera.fps`, and `camera.pixel_format` in `xler.yaml` (defaults: `1280x720`, `30`, `mjpeg`).
 - Frames are saved as JPEGs with EXIF timestamps in `recordings/front_stereo_cam_left` and `recordings/front_stereo_cam_right`.
 
+### Recorded Files Layout
+
+When recording is enabled, images and metadata are written under the `recordings/` directory by default:
+
+```text
+recordings/
+├── front_stereo_cam_left/
+│   ├── 0000001.jpg
+│   ├── 0000002.jpg
+│   └── ...
+├── front_stereo_cam_right/
+│   ├── 0000001.jpg
+│   ├── 0000002.jpg
+│   └── ...
+└── frames_meta.json
+```
+
+- Each capture uses a monotonic, zero-padded 7-digit index for the filename (e.g. `0000001.jpg`). The same basename appears in both left/right folders.
+- A `frames_meta.json` file in the `recordings/` root stores the mapping from filename to capture metadata, including the control-loop frame index and timestamp in **nanoseconds**:
+
+```json
+{
+  "0000001.jpg": {
+    "timestamp_ns": 1732372201500000000,
+    "frame_index": 120
+  }
+}
+```
+
+You can use this JSON file to pair images with their precise capture time and frame index during offline processing.
+
 ## Camera Helper Script (Optional)
 To stream three USB cameras via MJPEG:
 ```bash
