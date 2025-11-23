@@ -78,6 +78,9 @@ class StereoCameraRecorder:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="xler_cam")
         self._started = False
 
+        # Workspace directory under output_root (workspace1, workspace2, ...)
+        self._workspace_path: Optional[Path] = None
+
         # Monotonic image counter and metadata mapping
         self._frame_counter = 0
         self._metadata_path: Optional[Path] = None
@@ -89,13 +92,30 @@ class StereoCameraRecorder:
             if self._started:
                 return
 
-            self.left_path = self.output_root / self.left_folder
-            self.right_path = self.output_root / self.right_folder
+            # Choose a new workspace directory name: workspace1, workspace2, ...
+            # by scanning existing workspaceN folders under output_root.
+            next_workspace_idx = 1
+            if self.output_root.exists():
+                existing_indices: list[int] = []
+                for child in self.output_root.iterdir():
+                    if child.is_dir() and child.name.startswith("workspace"):
+                        suffix = child.name[len("workspace") :]
+                        if suffix.isdigit():
+                            existing_indices.append(int(suffix))
+                if existing_indices:
+                    next_workspace_idx = max(existing_indices) + 1
+
+            workspace_name = f"workspace{next_workspace_idx}"
+            self._workspace_path = self.output_root / workspace_name
+            self._workspace_path.mkdir(parents=True, exist_ok=True)
+
+            self.left_path = self._workspace_path / self.left_folder
+            self.right_path = self._workspace_path / self.right_folder
             self.left_path.mkdir(parents=True, exist_ok=True)
             self.right_path.mkdir(parents=True, exist_ok=True)
 
-            # JSON mapping file in recordings root
-            self._metadata_path = self.output_root / "frames_meta.json"
+            # JSON mapping file in workspace root
+            self._metadata_path = self._workspace_path / "frames_meta.json"
             if self._metadata_path.exists():
                 try:
                     with self._metadata_path.open("r", encoding="utf-8") as f:
