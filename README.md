@@ -43,23 +43,27 @@ python xler.py
 
 ### Recorded Files Layout
 
-When recording is enabled, images and metadata are written under the `recordings/` directory by default:
+When recording is enabled, images and metadata are written under the `recordings/` directory by default. Each run creates a new `workspaceN` folder (e.g. `workspace1`, `workspace2`, ...):
 
 ```text
 recordings/
-├── front_stereo_cam_left/
-│   ├── 0000001.jpg
-│   ├── 0000002.jpg
+├── workspace1/
+│   ├── front_stereo_cam_left/
+│   │   ├── 0000001.jpg
+│   │   ├── 0000002.jpg
+│   │   └── ...
+│   ├── front_stereo_cam_right/
+│   │   ├── 0000001.jpg
+│   │   ├── 0000002.jpg
+│   │   └── ...
+│   └── frames_meta.json
+├── workspace2/
 │   └── ...
-├── front_stereo_cam_right/
-│   ├── 0000001.jpg
-│   ├── 0000002.jpg
-│   └── ...
-└── frames_meta.json
+└── ...
 ```
 
-- Each capture uses a monotonic, zero-padded 7-digit index for the filename (e.g. `0000001.jpg`). The same basename appears in both left/right folders.
-- A `frames_meta.json` file in the `recordings/` root stores the mapping from filename to capture metadata, including the control-loop frame index and timestamp in **nanoseconds**:
+- Each capture uses a monotonic, zero-padded 7-digit index for the filename (e.g. `0000001.jpg`). The same basename appears in both left/right folders for a given workspace.
+- A `frames_meta.json` file in each `workspaceN` folder stores the mapping from filename to capture metadata, including the control-loop frame index and timestamp in **nanoseconds**:
 
 ```json
 {
@@ -70,7 +74,7 @@ recordings/
 }
 ```
 
-You can use this JSON file to pair images with their precise capture time and frame index during offline processing.
+You can use this JSON file to pair images with their precise capture time and frame index during offline processing. Each workspace is self-contained, so you can archive or analyze them independently.
 
 ## Camera Helper Script (Optional)
 To stream three USB cameras via MJPEG:
