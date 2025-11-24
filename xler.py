@@ -28,6 +28,7 @@ Controls:
 import argparse
 import logging
 import sys
+import threading
 import time
 import glob
 import platform
@@ -211,6 +212,8 @@ def main():
 
     # Configure optional stereo camera recording
     recorder = None
+    camera_thread = None
+    camera_stop_event = None
     record_cameras = args.record_cameras or camera_settings.get("enabled", False)
     if record_cameras:
         left_cfg = camera_settings.get("left", {})
@@ -257,6 +260,33 @@ def main():
                 logger.error("Failed to initialize camera recorder: %s", exc)
                 recorder = None
                 record_cameras = False
+        if recorder is not None:
+            # Run camera capture on its own thread so motor control timing is unaffected.
+            camera_stop_event = threading.Event()
+
+            def _camera_loop(rec: StereoCameraRecorder, stop_event: threading.Event) -> None:
+                capture_rate = fps if fps > 0 else 1
+                period = 1.0 / capture_rate
+                next_capture = time.time()
+                frame_counter = 0
+                while not stop_event.is_set():
+                    now = time.time()
+                    sleep_time = next_capture - now
+                    if sleep_time > 0:
+                        stop_event.wait(sleep_time)
+                        if stop_event.is_set():
+                            break
+                    frame_counter += 1
+                    rec.maybe_capture(frame_counter, time.time())
+                    next_capture += period
+
+            camera_thread = threading.Thread(
+                target=_camera_loop,
+                args=(recorder, camera_stop_event),
+                name="camera_loop",
+                daemon=True,
+            )
+            camera_thread.start()
 
     # Create Feetech motor bus (like lekiwi_base does)
     print(f"\n[init] Creating FeetechMotorsBus on {port}...")
@@ -328,10 +358,6 @@ def main():
                 logger.warning(f"Failed to read observation: {e}")
                 obs = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
-            # Capture stereo frames if requested
-            if recorder is not None:
-                recorder.maybe_capture(loop_counter, current_loop_time)
-
             # Only print when there's movement (commanded or observed)
             has_command = abs(x_vel) > 0.01 or abs(y_vel) > 0.01 or abs(theta_vel) > 0.01
             has_motion = abs(obs["x.vel"]) > 0.01 or abs(obs["y.vel"]) > 0.01 or abs(obs["theta.vel"]) > 0.01
@@ -372,6 +398,10 @@ def main():
 
     finally:
         # Cleanup
+        if camera_stop_event is not None:
+            camera_stop_event.set()
+        if camera_thread is not None:
+            camera_thread.join(timeout=2.0)
         if connected:
             print("\n[cleanup] Stopping motors...")
             try:
