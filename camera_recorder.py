@@ -16,7 +16,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import IO, Any, Optional, Tuple
 
 try:  # OpenCV is required for grabbing frames
     import cv2  # type: ignore
@@ -84,7 +84,7 @@ class StereoCameraRecorder:
         # Monotonic image counter and metadata mapping
         self._frame_counter = 0
         self._metadata_path: Optional[Path] = None
-        self._metadata: dict[str, dict[str, int]] = {}
+        self._metadata_file: Optional[IO[str]] = None
 
     def start(self) -> None:
         """Open camera devices and prepare output directories."""
@@ -116,25 +116,8 @@ class StereoCameraRecorder:
 
             # JSON mapping file in workspace root
             self._metadata_path = self._workspace_path / "frames_meta.json"
-            if self._metadata_path.exists():
-                try:
-                    with self._metadata_path.open("r", encoding="utf-8") as f:
-                        existing = json.load(f)
-                    if isinstance(existing, dict):
-                        self._metadata = existing  # type: ignore[assignment]
-                        # Continue numbering from the max existing index (filenames as 7-digit numbers)
-                        try:
-                            max_id = max(int(name.split(".")[0]) for name in self._metadata.keys())
-                        except ValueError:
-                            max_id = 0
-                        self._frame_counter = max_id
-                except (json.JSONDecodeError, OSError):
-                    # If corrupt, start fresh
-                    self._metadata = {}
-                    self._frame_counter = 0
-            else:
-                self._metadata = {}
-                self._frame_counter = 0
+            self._metadata_file = self._metadata_path.open("a", encoding="utf-8")
+            self._frame_counter = self._next_frame_index()
 
             self._left_capture = self._open_capture(self.left_device)
             self._right_capture = self._open_capture(self.right_device)
@@ -158,17 +141,17 @@ class StereoCameraRecorder:
 
             if self._right_capture is not None:
                 self._right_capture.release()
-                self._right_capture = None
+            self._right_capture = None
 
             self._executor.shutdown(wait=True, cancel_futures=False)
 
-            # Persist metadata mapping if available
-            if self._metadata_path is not None:
+            if self._metadata_file is not None:
                 try:
-                    with self._metadata_path.open("w", encoding="utf-8") as f:
-                        json.dump(self._metadata, f, indent=2, sort_keys=True)
+                    self._metadata_file.flush()
+                    self._metadata_file.close()
                 except OSError:
                     pass
+                self._metadata_file = None
 
             self._started = False
 
@@ -226,6 +209,18 @@ class StereoCameraRecorder:
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         capture.set(cv2.CAP_PROP_FPS, float(self.fps))
+
+    def _next_frame_index(self) -> int:
+        """
+        Derive the next frame ID by scanning existing files so we do not keep
+        a growing metadata mapping in memory (important on low-memory devices).
+        """
+        max_id = 0
+        for path in self.left_path.glob("*.jpg"):
+            stem = path.stem
+            if stem.isdigit():
+                max_id = max(max_id, int(stem))
+        return max_id
 
     def _open_capture(self, device) -> "cv2.VideoCapture":
         """
@@ -322,11 +317,12 @@ class StereoCameraRecorder:
         # Record mapping in memory (timestamp in nanoseconds)
         ts_ns = int(timestamp * 1_000_000_000)
         with self._lock:
-            # One entry per filename; we rely on identical basenames for left/right
-            if self._metadata is not None:
-                self._metadata[f"{filename}.jpg"] = {
-                    "timestamp_ns": ts_ns,
-                }
+            # Append metadata line to avoid holding the full mapping in memory.
+            if self._metadata_file is not None:
+                record = {"filename": f"{filename}.jpg", "timestamp_ns": ts_ns}
+                self._metadata_file.write(json.dumps(record))
+                self._metadata_file.write("\n")
+                self._metadata_file.flush()
 
     def _save_jpeg(self, image: "Image.Image", path: Path, timestamp: float) -> None:
         save_kwargs = {"format": "JPEG", "quality": 95}
