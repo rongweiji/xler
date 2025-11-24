@@ -260,8 +260,16 @@ def main():
             # Run camera capture on its own thread so motor control timing is unaffected.
             camera_stop_event = threading.Event()
 
-            def _camera_loop(rec: StereoCameraRecorder, stop_event: threading.Event) -> None:
-                capture_rate = fps if fps > 0 else 1
+            def _camera_loop(rec: StereoCameraRecorder, stop_event: threading.Event, fps_value) -> None:
+                try:
+                    capture_rate = float(fps_value)
+                except (TypeError, ValueError):
+                    logger.warning("Invalid camera fps %r; defaulting to 30", fps_value)
+                    capture_rate = 30.0
+                if capture_rate <= 0:
+                    logger.warning("Non-positive camera fps %r; defaulting to 30", fps_value)
+                    capture_rate = 30.0
+
                 period = 1.0 / capture_rate
                 next_capture = time.time()
                 frame_counter = 0
@@ -273,12 +281,16 @@ def main():
                         if stop_event.is_set():
                             break
                     frame_counter += 1
-                    rec.maybe_capture(frame_counter, time.time())
+                    try:
+                        rec.maybe_capture(frame_counter, time.time())
+                    except Exception:
+                        logger.exception("Camera capture loop encountered an error; stopping capture thread")
+                        break
                     next_capture += period
 
             camera_thread = threading.Thread(
                 target=_camera_loop,
-                args=(recorder, camera_stop_event),
+                args=(recorder, camera_stop_event, fps),
                 name="camera_loop",
                 daemon=True,
             )
