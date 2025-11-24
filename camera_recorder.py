@@ -326,7 +326,6 @@ class StereoCameraRecorder:
             if self._metadata is not None:
                 self._metadata[f"{filename}.jpg"] = {
                     "timestamp_ns": ts_ns,
-                    "frame_index": frame_index,
                 }
 
     def _save_jpeg(self, image: "Image.Image", path: Path, timestamp: float) -> None:

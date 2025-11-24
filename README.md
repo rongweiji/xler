@@ -63,13 +63,12 @@ recordings/
 ```
 
 - Each capture uses a monotonic, zero-padded 7-digit index for the filename (e.g. `0000001.jpg`). The same basename appears in both left/right folders for a given workspace.
-- A `frames_meta.json` file in each `workspaceN` folder stores the mapping from filename to capture metadata, including the control-loop frame index and timestamp in **nanoseconds**:
+- A `frames_meta.json` file in each `workspaceN` folder stores the mapping from filename to capture metadata, including the capture timestamp in **nanoseconds**:
 
 ```json
 {
   "0000001.jpg": {
-    "timestamp_ns": 1732372201500000000,
-    "frame_index": 120
+    "timestamp_ns": 1732372201500000000
   }
 }
 ```
