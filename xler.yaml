@@ -16,7 +16,7 @@ orientation:
 camera:
   enabled: false              # Set to true to record during control sessions
   output_dir: recordings      # Root directory for saved images
-  resolution: "1280x720"      # Capture resolution (WIDTHxHEIGHT)
+  resolution: "640x480"      # Capture resolution (WIDTHxHEIGHT)
   fps: 30                     # Frame rate to request from camera
   pixel_format: mjpeg         # mjpeg, yuyv, etc.
   left:
