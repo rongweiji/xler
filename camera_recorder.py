@@ -34,7 +34,7 @@ class StereoCameraRecorder:
     Capture synchronized frames from left/right cameras and persist them as JPEG.
 
     The recorder reads from two V4L2 devices (left/right), capturing frames
-    every N invocations of ``maybe_capture``. Saving happens asynchronously to
+    on each invocation of ``maybe_capture``. Saving happens asynchronously to
     avoid stalling the control loop.
     """
 
@@ -43,7 +43,6 @@ class StereoCameraRecorder:
         *,
         left_device: str,
         right_device: str,
-        frame_interval: int = 20,
         output_root: Path | str = Path("recordings"),
         left_folder: str = "front_stereo_cam_left",
         right_folder: str = "front_stereo_cam_right",
@@ -64,7 +63,6 @@ class StereoCameraRecorder:
 
         self.left_device = left_device
         self.right_device = right_device
-        self.frame_interval = max(frame_interval, 1)
         self.output_root = Path(output_root)
         self.left_folder = left_folder
         self.right_folder = right_folder
@@ -157,16 +155,13 @@ class StereoCameraRecorder:
 
     def maybe_capture(self, frame_index: int, timestamp: float) -> None:
         """
-        Capture and save frames if the requested interval is met.
+        Capture and save frames.
 
         Args:
             frame_index: Current control loop iteration
             timestamp:   Loop timestamp (seconds since epoch)
         """
-        if not self._started or self.frame_interval <= 0:
-            return
-
-        if frame_index % self.frame_interval != 0:
+        if not self._started:
             return
 
         # Avoid blocking the control loop longer than necessary.

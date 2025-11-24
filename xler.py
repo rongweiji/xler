@@ -151,7 +151,6 @@ def main():
     parser.add_argument("--record-cameras", action="store_true", help="Enable stereo camera recording")
     parser.add_argument("--camera-left", type=str, default=None, help="Left camera device path (e.g. /dev/video1)")
     parser.add_argument("--camera-right", type=str, default=None, help="Right camera device path (e.g. /dev/video3)")
-    parser.add_argument("--camera-frame-interval", type=int, default=None, help="Frames between captures (default: 20)")
     parser.add_argument("--camera-output-dir", type=str, default=None, help="Root directory for captured images")
     args = parser.parse_args()
 
@@ -220,7 +219,6 @@ def main():
         right_cfg = camera_settings.get("right", {})
         left_device = args.camera_left or left_cfg.get("device")
         right_device = args.camera_right or right_cfg.get("device")
-        frame_interval = args.camera_frame_interval or camera_settings.get("frame_interval", 20)
         output_dir = args.camera_output_dir or camera_settings.get("output_dir", "recordings")
         left_folder = left_cfg.get("folder", "front_stereo_cam_left")
         right_folder = right_cfg.get("folder", "front_stereo_cam_right")
@@ -237,7 +235,6 @@ def main():
                 recorder = StereoCameraRecorder(
                     left_device=left_device,
                     right_device=right_device,
-                    frame_interval=frame_interval,
                     output_root=output_dir,
                     left_folder=left_folder,
                     right_folder=right_folder,
@@ -247,10 +244,9 @@ def main():
                 )
                 recorder.start()
                 logger.info(
-                    "Stereo recording enabled: left=%s right=%s interval=%s output=%s res=%s fps=%s fmt=%s",
+                    "Stereo recording enabled: left=%s right=%s output=%s res=%s fps=%s fmt=%s",
                     left_device,
                     right_device,
-                    frame_interval,
                     output_dir,
                     resolution,
                     fps,

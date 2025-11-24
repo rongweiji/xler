@@ -15,7 +15,6 @@ orientation:
 # Stereo camera recording configuration
 camera:
   enabled: false              # Set to true to record during control sessions
-  frame_interval: 20          # Capture every N control loop iterations
   output_dir: recordings      # Root directory for saved images
   resolution: "1280x720"      # Capture resolution (WIDTHxHEIGHT)
   fps: 30                     # Frame rate to request from camera
