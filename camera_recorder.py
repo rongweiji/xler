@@ -4,8 +4,7 @@ Stereo camera recording utilities for XLER.
 
 Provides a lightweight recorder that can grab frames from two V4L2 devices
 and persist them as JPEG images. Designed to be triggered from the control
-loop without blocking the main thread. Each saved frame embeds a timestamp
-in the EXIF metadata when supported by Pillow.
+loop without blocking the main thread.
 """
 
 from __future__ import annotations
@@ -22,11 +21,6 @@ try:  # OpenCV is required for grabbing frames
     import cv2  # type: ignore
 except ImportError:  # pragma: no cover - handled at runtime
     cv2 = None  # type: ignore
-
-try:  # Pillow is required for saving images
-    from PIL import Image  # type: ignore
-except ImportError:  # pragma: no cover - handled at runtime
-    Image = None  # type: ignore
 
 
 class StereoCameraRecorder:
@@ -53,11 +47,6 @@ class StereoCameraRecorder:
         if cv2 is None:
             raise RuntimeError(
                 "OpenCV (opencv-python) is required for camera recording. "
-                "Install it inside your environment to enable this feature."
-            )
-        if Image is None:
-            raise RuntimeError(
-                "Pillow is required for camera recording. "
                 "Install it inside your environment to enable this feature."
             )
 
@@ -297,17 +286,14 @@ class StereoCameraRecorder:
         frame_id: int,
     ) -> None:
         """Persist the captured frames to disk."""
-        # Convert BGR (OpenCV) to RGB for Pillow
-        image_left = Image.fromarray(cv2.cvtColor(frame_left, cv2.COLOR_BGR2RGB))
-        image_right = Image.fromarray(cv2.cvtColor(frame_right, cv2.COLOR_BGR2RGB))
         # Zero-padded 7-digit index
         filename = f"{frame_id:07d}"
 
         left_path = self.left_path / f"{filename}.jpg"
         right_path = self.right_path / f"{filename}.jpg"
 
-        self._save_jpeg(image_left, left_path, timestamp)
-        self._save_jpeg(image_right, right_path, timestamp)
+        self._save_jpeg(frame_left, left_path)
+        self._save_jpeg(frame_right, right_path)
 
         # Record mapping in memory (timestamp in nanoseconds)
         ts_ns = int(timestamp * 1_000_000_000)
@@ -317,17 +303,11 @@ class StereoCameraRecorder:
                 record = {"filename": f"{filename}.jpg", "timestamp_ns": ts_ns}
                 self._metadata_file.write(json.dumps(record))
                 self._metadata_file.write("\n")
-                self._metadata_file.flush()
+                # Rely on OS buffering; flushing each frame hurts throughput
 
-    def _save_jpeg(self, image: "Image.Image", path: Path, timestamp: float) -> None:
-        save_kwargs = {"format": "JPEG", "quality": 95}
-        if hasattr(image, "getexif"):
-            exif = image.getexif()
-            timestamp_str = time.strftime("%Y:%m:%d %H:%M:%S", time.localtime(timestamp))
-            exif[0x9003] = timestamp_str  # DateTimeOriginal
-            exif[0x9004] = timestamp_str  # DateTimeDigitized
-            save_kwargs["exif"] = exif.tobytes()
-        image.save(path, **save_kwargs)
+    def _save_jpeg(self, frame_bgr, path: Path) -> None:
+        # Use OpenCV to encode/write JPEG directly to avoid Pillow conversions.
+        cv2.imwrite(str(path), frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 
 __all__ = ["StereoCameraRecorder"]
