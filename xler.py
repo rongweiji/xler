@@ -152,6 +152,7 @@ def main():
     parser.add_argument("--camera-left", type=str, default=None, help="Left camera device path (e.g. /dev/video1)")
     parser.add_argument("--camera-right", type=str, default=None, help="Right camera device path (e.g. /dev/video3)")
     parser.add_argument("--camera-output-dir", type=str, default=None, help="Root directory for captured images")
+    parser.add_argument("--fps", type=float, default=None, help="Camera capture FPS (overrides xler.yaml camera.fps)")
     args = parser.parse_args()
 
     # Load configuration
@@ -223,7 +224,8 @@ def main():
         left_folder = left_cfg.get("folder", "front_stereo_cam_left")
         right_folder = right_cfg.get("folder", "front_stereo_cam_right")
         resolution = camera_settings.get("resolution", "1280x720")
-        fps = camera_settings.get("fps", 30)
+        # CLI --fps overrides YAML camera.fps when provided
+        fps = args.fps if args.fps is not None else camera_settings.get("fps", 30)
         pixel_format = camera_settings.get("pixel_format", "mjpeg")
 
         if not left_device or not right_device:

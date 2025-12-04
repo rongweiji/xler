@@ -102,7 +102,7 @@ class StereoCameraRecorder:
             self.right_path.mkdir(parents=True, exist_ok=True)
 
             # JSON mapping file in workspace root
-            self._metadata_path = self._workspace_path / "frames_meta.json"
+            self._metadata_path = self._workspace_path / "frames_time.json"
             self._metadata_file = self._metadata_path.open("a", encoding="utf-8")
             self._frame_counter = self._next_frame_index()
 
