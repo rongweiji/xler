@@ -273,13 +273,13 @@ class WebRecorder:
                         rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
                         self._metadata_file.write(json.dumps(rec) + "\n")
                         self._since_flush += 1
-                        # Periodic flush so file isn't observed empty during long sessions
-                        if (time.time() - self._last_flush_ts) > 1.0 or self._since_flush >= 50:
-                            try:
-                                self._metadata_file.flush()
-                            except Exception:
-                                pass
-                            self._last_flush_ts = time.time()
+                        # Flush every write to guarantee visibility, keep periodic vars for future tuning
+                        try:
+                            self._metadata_file.flush()
+                        except Exception:
+                            pass
+                        self._last_flush_ts = time.time()
+                        if self._since_flush >= 50:
                             self._since_flush = 0
                     self._saved_count += 2
                 except Exception:
