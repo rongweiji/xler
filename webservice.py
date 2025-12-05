@@ -8,6 +8,8 @@ Run: python webservice.py --host 0.0.0.0 --port 8088
 import argparse
 import threading
 import time
+import json
+import os
 from typing import Optional, Tuple, Any
 from pathlib import Path
 
@@ -273,9 +275,11 @@ class WebRecorder:
                         rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
                         self._metadata_file.write(json.dumps(rec) + "\n")
                         self._since_flush += 1
-                        # Flush every write to guarantee visibility, keep periodic vars for future tuning
+                        # Flush + fsync every write to ensure durability/visibility on all platforms
                         try:
                             self._metadata_file.flush()
+                            import os
+                            os.fsync(self._metadata_file.fileno())
                         except Exception:
                             pass
                         self._last_flush_ts = time.time()
@@ -359,7 +363,10 @@ class CaptureSession:
                 f.write(rj)
             rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
             self._metadata_file.write(json.dumps(rec) + "\n")
-            self._metadata_file.flush()
+            try:
+                self._metadata_file.flush(); import os; os.fsync(self._metadata_file.fileno())
+            except Exception:
+                pass
             return {"ok": True, "filename": f"{fid}.jpg", "timestamp_ns": rec["timestamp_ns"],
                     "workspace": str(self._workspace_path)}
         except Exception as e:
