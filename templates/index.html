@@ -7,6 +7,7 @@
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 1rem; background: #0f1115; color: #e6e6e6; }
     header { margin-bottom: 1rem; }
+    .layout { display: grid; grid-template-columns: minmax(420px, 1.2fr) minmax(320px, 0.8fr); gap: 0.75rem; align-items: start; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem; align-items: start; }
     .panel { background: #161a20; border: 1px solid #232834; border-radius: 8px; padding: 0.75rem; }
     .frame { position: relative; }
@@ -22,34 +23,48 @@
   <header>
     <h2>XLER Dual Camera</h2>
     <div class="small">Live MJPEG streams with basic stats</div>
-    <div class="row" style="margin-top:0.5rem">
-      <button id="btnStart">Start Recording</button>
-      <button id="btnStop">Stop Recording</button>
-      <button id="btnCapture">Capture Once</button>
-      <span id="recStatus" class="badge">rec: off</span>
-      <span id="recInfo" class="badge">—</span>
-    </div>
-    <div class="panel" style="margin-top:0.75rem;">
-      <div class="row" style="margin-bottom:0.5rem"><strong>Drive Controls (Keyboard)</strong><span id="driveStatus" class="badge">drive: offline</span><span id="driveKey" class="badge">key: —</span></div>
-      <div class="small">Use keys: W=Forward, S=Back, A=Left, D=Right, Q=Rotate Left, E=Rotate Right. Release to stop.</div>
-    </div>
   </header>
 
-  <div class="grid">
-    <div class="panel">
-      <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span></div>
-      <div class="frame">
-        <img id="leftImg" src="/stream/left.mjpg" alt="Left camera stream" />
+  <div class="layout">
+    <div>
+      <div class="grid">
+        <div class="panel">
+          <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span></div>
+          <div class="frame">
+            <img id="leftImg" src="/stream/left.mjpg" alt="Left camera stream" />
+          </div>
+          <div class="stats" id="leftStats">fps: — | sharp: — | frames: — | last: —</div>
+        </div>
+
+        <div class="panel">
+          <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span></div>
+          <div class="frame">
+            <img id="rightImg" src="/stream/right.mjpg" alt="Right camera stream" />
+          </div>
+          <div class="stats" id="rightStats">fps: — | sharp: — | frames: — | last: —</div>
+        </div>
       </div>
-      <div class="stats" id="leftStats">fps: — | sharp: — | frames: — | last: —</div>
     </div>
 
-    <div class="panel">
-      <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span></div>
-      <div class="frame">
-        <img id="rightImg" src="/stream/right.mjpg" alt="Right camera stream" />
+    <div style="display:flex; flex-direction:column; gap:0.75rem;">
+      <div class="panel">
+        <div class="row" style="margin-bottom:0.5rem"><strong>Recording</strong><span id="recStatus" class="badge">rec: off</span></div>
+        <div class="row" style="margin-bottom:0.5rem; flex-wrap:wrap; gap:0.5rem;">
+          <button id="btnStart">Start Recording</button>
+          <button id="btnStop">Stop Recording</button>
+          <button id="btnCapture">Capture Once</button>
+        </div>
+        <div class="row" style="gap:0.5rem; flex-wrap:wrap;">
+          <span id="recInfo" class="badge">—</span>
+          <span id="driveStatus" class="badge">drive: offline</span>
+          <span id="driveKey" class="badge">key: —</span>
+        </div>
       </div>
-      <div class="stats" id="rightStats">fps: — | sharp: — | frames: — | last: —</div>
+
+      <div class="panel">
+        <div class="row" style="margin-bottom:0.5rem"><strong>Drive Controls (Keyboard)</strong></div>
+        <div class="small">Use keys: W=Forward, S=Back, A=Left, D=Right, Q=Rotate Left, E=Rotate Right. Release to stop.</div>
+      </div>
     </div>
   </div>
 
