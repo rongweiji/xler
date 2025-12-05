@@ -22,6 +22,12 @@
   <header>
     <h2>XLER Dual Camera</h2>
     <div class="small">Live MJPEG streams with basic stats</div>
+    <div class="row" style="margin-top:0.5rem">
+      <button id="btnStart">Start Recording</button>
+      <button id="btnStop">Stop Recording</button>
+      <span id="recStatus" class="badge">rec: off</span>
+      <span id="recInfo" class="badge">—</span>
+    </div>
   </header>
 
   <div class="grid">
@@ -62,6 +68,13 @@
         const rSharp = window.__lastSharpR ?? '—';
         document.getElementById('leftStats').textContent = `fps: ${left.fps_target ?? '—'} | sharp: ${lSharp} | frames: ${left.frames ?? '—'} | last: ${lTs}`;
         document.getElementById('rightStats').textContent = `fps: ${right.fps_target ?? '—'} | sharp: ${rSharp} | frames: ${right.frames ?? '—'} | last: ${rTs}`;
+
+        const rres = await fetch('/api/record/status');
+        const rstat = await rres.json();
+        const recOn = !!rstat.recording;
+        document.getElementById('recStatus').textContent = recOn ? 'rec: on' : 'rec: off';
+        const info = rstat.workspace ? `${rstat.fps ?? '—'} FPS | ${rstat.resolution?.width ?? '—'}x${rstat.resolution?.height ?? '—'} | saved: ${rstat.saved_files ?? 0}` : '—';
+        document.getElementById('recInfo').textContent = info;
       } catch (e) {
         // ignore errors; keep UI responsive
       }
@@ -134,6 +147,21 @@
     }
     // Run at ~5 Hz to balance CPU
     setInterval(updateSharpness, 200);
+
+    async function startRecording() {
+      try {
+        await fetch('/api/record/start', { method: 'POST' });
+        refreshStats();
+      } catch (e) {}
+    }
+    async function stopRecording() {
+      try {
+        await fetch('/api/record/stop', { method: 'POST' });
+        refreshStats();
+      } catch (e) {}
+    }
+    document.getElementById('btnStart').addEventListener('click', startRecording);
+    document.getElementById('btnStop').addEventListener('click', stopRecording);
   </script>
 </body>
 </html>
