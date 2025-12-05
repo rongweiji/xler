@@ -218,6 +218,8 @@
       document.getElementById('driveKey').textContent = label ? `key: ${label}` : 'key: —';
     }
 
+    let driveInterval = null;
+
     window.addEventListener('keydown', (ev) => {
       const k = ev.key.toLowerCase();
       if (!(k in keyMap)) return;
@@ -226,7 +228,10 @@
       activeKey = k;
       const cmd = keyMap[k];
       updateDriveLabel(cmd.label);
+      // Send immediately and then refresh periodically to keep motion alive
       sendDrive(cmd.x, cmd.y, cmd.theta);
+      if (driveInterval) clearInterval(driveInterval);
+      driveInterval = setInterval(() => sendDrive(cmd.x, cmd.y, cmd.theta), 300);
     });
 
     window.addEventListener('keyup', (ev) => {
@@ -234,6 +239,7 @@
       if (activeKey && k === activeKey) {
         activeKey = null;
         updateDriveLabel(null);
+        if (driveInterval) { clearInterval(driveInterval); driveInterval = null; }
         stopDrive();
       }
     });
