@@ -13,7 +13,7 @@ import json
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future, wait
 from pathlib import Path
 from typing import IO, Any, Optional, Tuple
 
@@ -60,9 +60,10 @@ class StereoCameraRecorder:
         self.pixel_format = pixel_format.lower()
 
         self._lock = threading.Lock()
-        self._left_capture: Optional["cv2.VideoCapture"] = None
-        self._right_capture: Optional["cv2.VideoCapture"] = None
+        self._left_capture: Optional[Any] = None
+        self._right_capture: Optional[Any] = None
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="xler_cam")
+        self._futures: list[Future] = []
         self._started = False
 
         # Workspace directory under output_root (workspace1, workspace2, ...)
@@ -116,8 +117,12 @@ class StereoCameraRecorder:
 
             self._started = True
 
-    def stop(self) -> None:
-        """Release camera handles and drain outstanding save tasks."""
+    def stop(self, drain_timeout: float = 3.0) -> None:
+        """Release camera handles and stop background workers quickly.
+
+        drain_timeout: seconds to wait for outstanding save tasks before
+        cancelling pending ones. Keeps shutdown responsive on slow disks.
+        """
         with self._lock:
             if not self._started:
                 return
@@ -130,8 +135,18 @@ class StereoCameraRecorder:
                 self._right_capture.release()
             self._right_capture = None
 
-            self._executor.shutdown(wait=True, cancel_futures=False)
+        # Outside the lock: wait a short time for pending saves, then cancel.
+        pending = [f for f in self._futures if not f.done()]
+        if pending:
+            done, not_done = wait(pending, timeout=max(0.0, float(drain_timeout)))
+            for f in not_done:
+                f.cancel()
 
+        # Request shutdown without blocking; cancel not yet started tasks.
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+        with self._lock:
+            self._futures.clear()
             if self._metadata_file is not None:
                 try:
                     self._metadata_file.flush()
@@ -166,7 +181,7 @@ class StereoCameraRecorder:
         with self._lock:
             self._frame_counter += 1
             frame_id = self._frame_counter
-        self._executor.submit(
+        fut = self._executor.submit(
             self._save_pair,
             frame_left,
             frame_right,
@@ -174,8 +189,12 @@ class StereoCameraRecorder:
             timestamp,
             frame_id,
         )
+        self._futures.append(fut)
+        # Periodically clean up done futures to avoid unbounded growth.
+        if len(self._futures) > 256:
+            self._futures = [f for f in self._futures if not f.done()]
 
-    def _read_frame(self, capture: Optional["cv2.VideoCapture"]) -> tuple[bool, Optional[Any]]:
+    def _read_frame(self, capture: Optional[Any]) -> tuple[bool, Optional[Any]]:
         if capture is None:
             return False, None
         return capture.read()
@@ -188,7 +207,7 @@ class StereoCameraRecorder:
             raise ValueError(f"Invalid resolution format: {value}")
         return int(match.group(1)), int(match.group(2))
 
-    def _configure_capture(self, capture: "cv2.VideoCapture") -> None:
+    def _configure_capture(self, capture: Any) -> None:
         width, height = self.resolution
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -206,7 +225,7 @@ class StereoCameraRecorder:
                 max_id = max(max_id, int(stem))
         return max_id
 
-    def _open_capture(self, device) -> "cv2.VideoCapture":
+    def _open_capture(self, device) -> Any:
         """
         Try several backend combinations to open a V4L2 device.
 
