@@ -214,10 +214,13 @@ class WebRecorder:
         self.left_path.mkdir(parents=True, exist_ok=True)
         self.right_path.mkdir(parents=True, exist_ok=True)
         meta_path = self._workspace_path / "frames_time.json"
-        self._metadata_file = meta_path.open("a", encoding="utf-8")
+        # Line-buffered writes so records appear during recording
+        self._metadata_file = meta_path.open("a", encoding="utf-8", buffering=1)
         self._frame_counter = self._next_frame_index(self.left_path)
         self._saved_count = 0
         self._stop.clear()
+        self._last_flush_ts = time.time()
+        self._since_flush = 0
 
         def _loop():
             period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
@@ -246,6 +249,15 @@ class WebRecorder:
                     if self._metadata_file is not None:
                         rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
                         self._metadata_file.write(json.dumps(rec) + "\n")
+                        self._since_flush += 1
+                        # Periodic flush so file isn't observed empty during long sessions
+                        if (time.time() - self._last_flush_ts) > 1.0 or self._since_flush >= 50:
+                            try:
+                                self._metadata_file.flush()
+                            except Exception:
+                                pass
+                            self._last_flush_ts = time.time()
+                            self._since_flush = 0
                     self._saved_count += 2
                 except Exception:
                     # Continue even if a single write fails
