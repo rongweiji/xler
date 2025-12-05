@@ -25,13 +25,13 @@
 
   <div class="grid">
     <div class="panel">
-      <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span> <span id="leftSharp" class="badge" title="Image sharpness">sharp: —</span></div>
+      <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span> <span id="leftFps" class="badge" title="Target FPS">fps: —</span> <span id="leftSharp" class="badge" title="Image sharpness">sharp: —</span></div>
       <img id="leftImg" src="/stream/left.mjpg" alt="Left camera stream" />
       <div class="stats" id="leftStats">—</div>
     </div>
 
     <div class="panel">
-      <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span> <span id="rightSharp" class="badge" title="Image sharpness">sharp: —</span></div>
+      <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span> <span id="rightFps" class="badge" title="Target FPS">fps: —</span> <span id="rightSharp" class="badge" title="Image sharpness">sharp: —</span></div>
       <img id="rightImg" src="/stream/right.mjpg" alt="Right camera stream" />
       <div class="stats" id="rightStats">—</div>
     </div>
@@ -51,10 +51,12 @@
         const rRes = right.resolution ? `${right.resolution.width}x${right.resolution.height}` : '—';
         document.getElementById('leftRes').textContent = lRes;
         document.getElementById('rightRes').textContent = rRes;
+        document.getElementById('leftFps').textContent = `fps: ${left.fps_target ?? '—'}`;
+        document.getElementById('rightFps').textContent = `fps: ${right.fps_target ?? '—'}`;
         const lTs = left.last_frame_ts ? new Date(left.last_frame_ts*1000).toLocaleTimeString() : '—';
         const rTs = right.last_frame_ts ? new Date(right.last_frame_ts*1000).toLocaleTimeString() : '—';
-        document.getElementById('leftStats').textContent = `Target FPS: ${left.fps_target ?? '—'} | Frames: ${left.frames ?? '—'} | Last: ${lTs}`;
-        document.getElementById('rightStats').textContent = `Target FPS: ${right.fps_target ?? '—'} | Frames: ${right.frames ?? '—'} | Last: ${rTs}`;
+        document.getElementById('leftStats').textContent = `Frames: ${left.frames ?? '—'} | Last: ${lTs}`;
+        document.getElementById('rightStats').textContent = `Frames: ${right.frames ?? '—'} | Last: ${rTs}`;
       } catch (e) {
         // ignore errors; keep UI responsive
       }
