@@ -30,22 +30,8 @@
       <span id="recInfo" class="badge">—</span>
     </div>
     <div class="panel" style="margin-top:0.75rem;">
-      <div class="row" style="margin-bottom:0.5rem"><strong>Drive Controls</strong><span id="driveStatus" class="badge">drive: offline</span></div>
-      <div style="display:grid; grid-template-columns: repeat(3, minmax(80px, 1fr)); gap: 0.4rem; justify-items:center;">
-        <div></div>
-        <button class="drive" data-x="1" data-y="0" data-theta="0">Forward</button>
-        <div></div>
-        <button class="drive" data-x="0" data-y="1" data-theta="0">Left</button>
-        <button class="drive" data-x="0" data-y="0" data-theta="0">Stop</button>
-        <button class="drive" data-x="0" data-y="-1" data-theta="0">Right</button>
-        <div></div>
-        <button class="drive" data-x="-1" data-y="0" data-theta="0">Back</button>
-        <div></div>
-      </div>
-      <div style="display:flex; gap:0.4rem; margin-top:0.4rem; justify-content:center;">
-        <button class="drive" data-x="0" data-y="0" data-theta="1">Rotate Left</button>
-        <button class="drive" data-x="0" data-y="0" data-theta="-1">Rotate Right</button>
-      </div>
+      <div class="row" style="margin-bottom:0.5rem"><strong>Drive Controls (Keyboard)</strong><span id="driveStatus" class="badge">drive: offline</span><span id="driveKey" class="badge">key: —</span></div>
+      <div class="small">Use keys: W=Forward, S=Back, A=Left, D=Right, Q=Rotate Left, E=Rotate Right. Release to stop.</div>
     </div>
   </header>
 
@@ -214,13 +200,42 @@
         await fetch('/api/drive/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x, y, theta }) });
       } catch (e) {}
     }
-    document.querySelectorAll('button.drive').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const x = parseFloat(btn.dataset.x);
-        const y = parseFloat(btn.dataset.y);
-        const theta = parseFloat(btn.dataset.theta);
-        sendDrive(x, y, theta);
-      });
+    async function stopDrive() {
+      try { await fetch('/api/drive/stop', { method: 'POST' }); } catch (e) {}
+    }
+
+    const keyMap = {
+      'w': { x: 1, y: 0, theta: 0, label: 'Forward (W)' },
+      's': { x: -1, y: 0, theta: 0, label: 'Back (S)' },
+      'a': { x: 0, y: 1, theta: 0, label: 'Left (A)' },
+      'd': { x: 0, y: -1, theta: 0, label: 'Right (D)' },
+      'q': { x: 0, y: 0, theta: 1, label: 'Rotate Left (Q)' },
+      'e': { x: 0, y: 0, theta: -1, label: 'Rotate Right (E)' },
+    };
+    let activeKey = null;
+
+    function updateDriveLabel(label) {
+      document.getElementById('driveKey').textContent = label ? `key: ${label}` : 'key: —';
+    }
+
+    window.addEventListener('keydown', (ev) => {
+      const k = ev.key.toLowerCase();
+      if (!(k in keyMap)) return;
+      ev.preventDefault();
+      if (activeKey === k) return;
+      activeKey = k;
+      const cmd = keyMap[k];
+      updateDriveLabel(cmd.label);
+      sendDrive(cmd.x, cmd.y, cmd.theta);
+    });
+
+    window.addEventListener('keyup', (ev) => {
+      const k = ev.key.toLowerCase();
+      if (activeKey && k === activeKey) {
+        activeKey = null;
+        updateDriveLabel(null);
+        stopDrive();
+      }
     });
   </script>
 </body>
