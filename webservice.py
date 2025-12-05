@@ -12,12 +12,17 @@ from typing import Optional, Tuple, Any
 from pathlib import Path
 
 import yaml
-from flask import Flask, Response, render_template, jsonify
+from flask import Flask, Response, render_template, jsonify, request
 
 try:
     import cv2  # type: ignore
 except ImportError as exc:
     raise RuntimeError("OpenCV (opencv-python) is required: pip install opencv-python") from exc
+
+# Motor control imports (reusing xler stack)
+from motors2 import Motor, MotorNormMode, find_serial_port
+from motors2.feetech import FeetechMotorsBus
+from motors2.base_controller import LeKiwiBaseController
 
 app = Flask(__name__, template_folder="templates")
 
@@ -28,6 +33,22 @@ def load_app_settings(settings_path: str = "xler.yaml") -> dict:
         return {}
     with open(path, "r") as f:
         return yaml.safe_load(f) or {}
+
+
+def load_motor_config(config_path: str = "motors2/config.yaml", **overrides) -> dict:
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    if 'port' in overrides and overrides['port'] is not None:
+        config['serial']['port'] = overrides['port']
+    if 'motor_left' in overrides and overrides['motor_left'] is not None:
+        config['motor_ids']['left'] = overrides['motor_left']
+    if 'motor_right' in overrides and overrides['motor_right'] is not None:
+        config['motor_ids']['right'] = overrides['motor_right']
+    if 'motor_back' in overrides and overrides['motor_back'] is not None:
+        config['motor_ids']['back'] = overrides['motor_back']
+    if 'max_speed' in overrides and overrides['max_speed'] is not None:
+        config['control']['max_speed_ms'] = overrides['max_speed']
+    return config
 
 
 class CameraReader:
@@ -118,6 +139,7 @@ left_reader: Optional[CameraReader] = None
 right_reader: Optional[CameraReader] = None
 recorder = None  # type: ignore
 capture_session = None  # type: ignore
+drive_loop = None  # type: ignore
 
 
 @app.route("/")
@@ -351,6 +373,103 @@ class CaptureSession:
         }
 
 
+class DriveLoop:
+    """Simple control loop for driving the base from HTTP commands."""
+
+    def __init__(self, config: dict, port_override: Optional[str] = None) -> None:
+        self.config = config
+        self.port_override = port_override
+        self.connected = False
+        self._lock = threading.Lock()
+        self._cmd = {"x": 0.0, "y": 0.0, "theta": 0.0, "hold_until": 0.0}
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self._controller: Optional[LeKiwiBaseController] = None
+        self._bus: Optional[FeetechMotorsBus] = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        port = self.config['serial']['port']
+        if port is None:
+            port = find_serial_port()
+        if port is None:
+            print("[drive] No serial port found; drive disabled")
+            return
+        motors = {
+            "base_left_wheel": Motor(self.config['motor_ids']['left'], self.config['motor']['model'], MotorNormMode.DEGREES),
+            "base_right_wheel": Motor(self.config['motor_ids']['right'], self.config['motor']['model'], MotorNormMode.DEGREES),
+            "base_back_wheel": Motor(self.config['motor_ids']['back'], self.config['motor']['model'], MotorNormMode.DEGREES),
+        }
+        bus = FeetechMotorsBus(port=port, motors=motors, protocol_version=self.config['serial']['protocol_version'])
+        try:
+            bus.connect()
+            controller = LeKiwiBaseController(bus, self.config)
+            controller.configure()
+            self._controller = controller
+            self._bus = bus
+            self.connected = True
+        except Exception as e:
+            print(f"[drive] Failed to init motors: {e}")
+            self.connected = False
+            return
+
+        def _loop():
+            freq = self.config['control']['frequency']
+            dt = 1.0 / freq
+            max_speed = self.config['control']['max_speed_ms']
+            max_rot = self.config['control']['max_rotation_degs']
+            while not self._stop.is_set():
+                now = time.time()
+                with self._lock:
+                    if now > self._cmd['hold_until']:
+                        cx = cy = cth = 0.0
+                    else:
+                        cx = self._cmd['x'] * max_speed
+                        cy = self._cmd['y'] * max_speed
+                        cth = self._cmd['theta'] * max_rot
+                try:
+                    self._controller.move(x_vel=cx, y_vel=cy, theta_vel=cth)
+                except Exception:
+                    pass
+                self._stop.wait(dt)
+            # stop motors on exit
+            try:
+                self._controller.stop()
+                self._controller.reset_to_position_mode()
+                self._bus.disconnect()
+            except Exception:
+                pass
+
+        self._stop.clear()
+        self._thread = threading.Thread(target=_loop, name="drive_loop", daemon=True)
+        self._thread.start()
+
+    def set_command(self, x: float, y: float, theta: float, hold_ms: int = 400):
+        with self._lock:
+            self._cmd = {
+                "x": max(-1.0, min(1.0, x)),
+                "y": max(-1.0, min(1.0, y)),
+                "theta": max(-1.0, min(1.0, theta)),
+                "hold_until": time.time() + (hold_ms / 1000.0),
+            }
+
+    def stop_now(self):
+        with self._lock:
+            self._cmd = {"x": 0.0, "y": 0.0, "theta": 0.0, "hold_until": 0.0}
+
+    def status(self) -> dict:
+        with self._lock:
+            cmd = dict(self._cmd)
+        return {
+            "connected": self.connected,
+            "port": self.config['serial']['port'],
+            "cmd": cmd,
+            "max_speed_ms": self.config['control']['max_speed_ms'],
+            "max_rotation_degs": self.config['control']['max_rotation_degs'],
+        }
+
+
 @app.route("/api/record/status")
 def api_record_status():
     global recorder
@@ -392,6 +511,35 @@ def api_capture_once():
     if not left_reader or not right_reader:
         return jsonify({"ok": False, "error": "cameras not initialized"}), 503
     return jsonify(capture_session.capture_once(left_reader, right_reader))
+
+
+@app.route("/api/drive/status")
+def api_drive_status():
+    global drive_loop
+    return jsonify(drive_loop.status() if drive_loop else {"connected": False})
+
+
+@app.route("/api/drive/command", methods=["POST"])
+def api_drive_command():
+    global drive_loop
+    if not drive_loop or not drive_loop.connected:
+        return jsonify({"ok": False, "error": "drive not available"}), 503
+    data = request.get_json(silent=True) or {}
+    x = float(data.get("x", 0.0))
+    y = float(data.get("y", 0.0))
+    theta = float(data.get("theta", 0.0))
+    hold_ms = int(data.get("hold_ms", 400))
+    drive_loop.set_command(x, y, theta, hold_ms)
+    return jsonify({"ok": True, "status": drive_loop.status()})
+
+
+@app.route("/api/drive/stop", methods=["POST"])
+def api_drive_stop():
+    global drive_loop
+    if not drive_loop or not drive_loop.connected:
+        return jsonify({"ok": True, "status": {"connected": False}})
+    drive_loop.stop_now()
+    return jsonify({"ok": True, "status": drive_loop.status()})
 
 
 def parse_resolution(value: str | Tuple[int, int]) -> Tuple[int, int]:
@@ -449,6 +597,12 @@ def main():
                                      session_folder=session_folder,
                                      left_folder=left_folder,
                                      right_folder=right_folder)
+
+    # Initialize drive loop
+    global drive_loop
+    motor_config = load_motor_config("motors2/config.yaml")
+    drive_loop = DriveLoop(motor_config)
+    drive_loop.start()
 
     try:
         app.run(host=args.host, port=args.port, threaded=True)
