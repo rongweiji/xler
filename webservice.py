@@ -117,6 +117,7 @@ class CameraReader:
 left_reader: Optional[CameraReader] = None
 right_reader: Optional[CameraReader] = None
 recorder = None  # type: ignore
+capture_session = None  # type: ignore
 
 
 @app.route("/")
@@ -291,6 +292,65 @@ class WebRecorder:
         }
 
 
+class CaptureSession:
+    """Button-triggered capture session that saves pairs into a persistent folder.
+
+    Uses the same naming and metadata scheme, but only writes on demand.
+    """
+
+    def __init__(self, output_root: Path, session_folder: str,
+                 left_folder: str, right_folder: str) -> None:
+        self.output_root = output_root
+        self.session_folder = session_folder
+        self.left_folder = left_folder
+        self.right_folder = right_folder
+        self._workspace_path: Path = self.output_root / self.session_folder
+        self._workspace_path.mkdir(parents=True, exist_ok=True)
+        self.left_path = self._workspace_path / self.left_folder
+        self.right_path = self._workspace_path / self.right_folder
+        self.left_path.mkdir(parents=True, exist_ok=True)
+        self.right_path.mkdir(parents=True, exist_ok=True)
+        self._meta_path = self._workspace_path / "frames_time.json"
+        self._metadata_file = self._meta_path.open("a", encoding="utf-8", buffering=1)
+        self._frame_counter = self._next_frame_index(self.left_path)
+
+    def _next_frame_index(self, left_path: Path) -> int:
+        max_id = 0
+        for p in left_path.glob("*.jpg"):
+            s = p.stem
+            if s.isdigit():
+                max_id = max(max_id, int(s))
+        return max_id
+
+    def capture_once(self, left: CameraReader, right: CameraReader) -> dict:
+        lj = left.get_latest_jpeg()
+        rj = right.get_latest_jpeg()
+        ts = time.time()
+        if lj is None or rj is None:
+            return {"ok": False, "error": "no frame"}
+        self._frame_counter += 1
+        fid = f"{self._frame_counter:07d}"
+        try:
+            with open(self.left_path / f"{fid}.jpg", "wb") as f:
+                f.write(lj)
+            with open(self.right_path / f"{fid}.jpg", "wb") as f:
+                f.write(rj)
+            rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
+            self._metadata_file.write(json.dumps(rec) + "\n")
+            self._metadata_file.flush()
+            return {"ok": True, "filename": f"{fid}.jpg", "timestamp_ns": rec["timestamp_ns"],
+                    "workspace": str(self._workspace_path)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def status(self) -> dict:
+        return {
+            "workspace": str(self._workspace_path),
+            "left_folder": self.left_folder,
+            "right_folder": self.right_folder,
+        }
+
+
 @app.route("/api/record/status")
 def api_record_status():
     global recorder
@@ -316,6 +376,22 @@ def api_record_stop():
         return jsonify({"ok": True, "status": {"recording": False}})
     recorder.stop()
     return jsonify({"ok": True, "status": recorder.status()})
+
+
+@app.route("/api/capture/status")
+def api_capture_status():
+    global capture_session
+    return jsonify(capture_session.status() if capture_session else None)
+
+
+@app.route("/api/capture/once", methods=["POST"])
+def api_capture_once():
+    global capture_session, left_reader, right_reader
+    if not capture_session:
+        return jsonify({"ok": False, "error": "capture session not initialized"}), 503
+    if not left_reader or not right_reader:
+        return jsonify({"ok": False, "error": "cameras not initialized"}), 503
+    return jsonify(capture_session.capture_once(left_reader, right_reader))
 
 
 def parse_resolution(value: str | Tuple[int, int]) -> Tuple[int, int]:
@@ -365,6 +441,14 @@ def main():
                            right_folder=right_folder,
                            resolution=resolution,
                            fps=fps)
+
+    # Prepare capture session using a persistent calibration workspace
+    global capture_session
+    session_folder = camera.get("calibration_workspace", "workspace_cali")
+    capture_session = CaptureSession(output_root=output_root,
+                                     session_folder=session_folder,
+                                     left_folder=left_folder,
+                                     right_folder=right_folder)
 
     try:
         app.run(host=args.host, port=args.port, threaded=True)

@@ -25,6 +25,7 @@
     <div class="row" style="margin-top:0.5rem">
       <button id="btnStart">Start Recording</button>
       <button id="btnStop">Stop Recording</button>
+      <button id="btnCapture">Capture Once</button>
       <span id="recStatus" class="badge">rec: off</span>
       <span id="recInfo" class="badge">—</span>
     </div>
@@ -75,6 +76,15 @@
         document.getElementById('recStatus').textContent = recOn ? 'rec: on' : 'rec: off';
         const info = rstat.workspace ? `${rstat.fps ?? '—'} FPS | ${rstat.resolution?.width ?? '—'}x${rstat.resolution?.height ?? '—'} | saved: ${rstat.saved_files ?? 0}` : '—';
         document.getElementById('recInfo').textContent = info;
+
+        // Capture session info
+        try {
+          const cres = await fetch('/api/capture/status');
+          const cstat = await cres.json();
+          if (cstat && cstat.workspace) {
+            document.getElementById('recInfo').title = `capture workspace: ${cstat.workspace}`;
+          }
+        } catch(e) {}
       } catch (e) {
         // ignore errors; keep UI responsive
       }
@@ -160,8 +170,18 @@
         refreshStats();
       } catch (e) {}
     }
+    async function captureOnce() {
+      try {
+        const res = await fetch('/api/capture/once', { method: 'POST' });
+        const data = await res.json();
+        if (data && data.ok) {
+          document.getElementById('recInfo').textContent = `captured: ${data.filename} | workspace: ${data.workspace}`;
+        }
+      } catch (e) {}
+    }
     document.getElementById('btnStart').addEventListener('click', startRecording);
     document.getElementById('btnStop').addEventListener('click', stopRecording);
+    document.getElementById('btnCapture').addEventListener('click', captureOnce);
   </script>
 </body>
 </html>
