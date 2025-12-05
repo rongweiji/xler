@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XLER Dual Camera</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 1rem; background: #0f1115; color: #e6e6e6; }
+    header { margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+    .panel { background: #161a20; border: 1px solid #232834; border-radius: 8px; padding: 0.75rem; }
+    img { width: 100%; height: auto; background: #0b0d11; border-radius: 6px; }
+    .stats { font-size: 0.9rem; color: #b9c0cf; }
+    .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .badge { display: inline-block; padding: 0.2rem 0.5rem; background: #243244; border-radius: 999px; font-size: 0.8rem; }
+    .small { font-size: 0.85rem; opacity: 0.8; }
+    footer { margin-top: 1rem; font-size: 0.85rem; color: #96a2b4; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>XLER Dual Camera</h2>
+    <div class="small">Live MJPEG streams with basic stats</div>
+  </header>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span></div>
+      <img id="leftImg" src="/stream/left.mjpg" alt="Left camera stream" />
+      <div class="stats" id="leftStats">—</div>
+    </div>
+
+    <div class="panel">
+      <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span></div>
+      <img id="rightImg" src="/stream/right.mjpg" alt="Right camera stream" />
+      <div class="stats" id="rightStats">—</div>
+    </div>
+  </div>
+
+  <footer>
+    Tip: open this page from another device via the Pi's IP and port.
+  </footer>
+
+  <script>
+    async function refreshStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        const left = data.left || {}; const right = data.right || {};
+        const lRes = left.resolution ? `${left.resolution.width}x${left.resolution.height}` : '—';
+        const rRes = right.resolution ? `${right.resolution.width}x${right.resolution.height}` : '—';
+        document.getElementById('leftRes').textContent = lRes;
+        document.getElementById('rightRes').textContent = rRes;
+        const lTs = left.last_frame_ts ? new Date(left.last_frame_ts*1000).toLocaleTimeString() : '—';
+        const rTs = right.last_frame_ts ? new Date(right.last_frame_ts*1000).toLocaleTimeString() : '—';
+        document.getElementById('leftStats').textContent = `Target FPS: ${left.fps_target ?? '—'} | Frames: ${left.frames ?? '—'} | Last: ${lTs}`;
+        document.getElementById('rightStats').textContent = `Target FPS: ${right.fps_target ?? '—'} | Frames: ${right.frames ?? '—'} | Last: ${rTs}`;
+      } catch (e) {
+        // ignore errors; keep UI responsive
+      }
+    }
+    setInterval(refreshStats, 1000);
+    refreshStats();
+  </script>
+</body>
+</html>

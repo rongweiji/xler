@@ -85,6 +85,34 @@ sudo ./tri_cam.sh start       # start all streams
 ```
 The default streams appear at `http://<pi-ip>/mjpeg/` and on ports 8080/8081/8083.
 
+## Dual-Camera Web Service (Flask)
+You can serve the two cameras over HTTP and view them from another device.
+
+### Install
+Inside the activated venv:
+```bash
+pip install -r requirements.txt
+```
+
+Ensure camera devices are set in `xler.yaml` under `camera.left.device` and `camera.right.device`.
+
+### Run
+```bash
+python webservice.py --host 0.0.0.0 --port 8088
+```
+
+Open from another device:
+```
+http://<pi-ip>:8088/
+```
+
+- Streams: `/stream/left.mjpg` and `/stream/right.mjpg` (MJPEG).
+- Stats endpoint: `/api/stats` returns JSON with resolution and counters.
+
+Notes:
+- Run the web service separately from `xler.py` recording to avoid camera conflicts.
+- FPS/resolution are read from `xler.yaml` (`camera.fps`, `camera.resolution`).
+
 ## Upgrading Dependencies
 Inside the activated venv:
 ```bash
