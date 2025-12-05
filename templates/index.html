@@ -9,8 +9,9 @@
     header { margin-bottom: 1rem; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
     .panel { background: #161a20; border: 1px solid #232834; border-radius: 8px; padding: 0.75rem; }
-    img { width: 100%; height: auto; background: #0b0d11; border-radius: 6px; }
-    .stats { font-size: 0.9rem; color: #b9c0cf; }
+    .frame { position: relative; }
+    img { width: 100%; height: auto; background: #0b0d11; border-radius: 6px; display: block; }
+    .stats { font-size: 0.9rem; color: #b9c0cf; margin-top: 0.5rem; }
     .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; gap: 0.5rem; }
     .badge { display: inline-block; padding: 0.2rem 0.5rem; background: #243244; border-radius: 999px; font-size: 0.8rem; }
     .small { font-size: 0.85rem; opacity: 0.8; }
@@ -25,15 +26,19 @@
 
   <div class="grid">
     <div class="panel">
-      <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span> <span id="leftFps" class="badge" title="Target FPS">fps: —</span> <span id="leftSharp" class="badge" title="Image sharpness">sharp: —</span></div>
-      <img id="leftImg" src="/stream/left.mjpg" alt="Left camera stream" />
-      <div class="stats" id="leftStats">—</div>
+      <div class="row"><strong>Left Camera</strong> <span id="leftRes" class="badge">—</span></div>
+      <div class="frame">
+        <img id="leftImg" src="/stream/left.mjpg" alt="Left camera stream" />
+      </div>
+      <div class="stats" id="leftStats">fps: — | sharp: — | frames: — | last: —</div>
     </div>
 
     <div class="panel">
-      <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span> <span id="rightFps" class="badge" title="Target FPS">fps: —</span> <span id="rightSharp" class="badge" title="Image sharpness">sharp: —</span></div>
-      <img id="rightImg" src="/stream/right.mjpg" alt="Right camera stream" />
-      <div class="stats" id="rightStats">—</div>
+      <div class="row"><strong>Right Camera</strong> <span id="rightRes" class="badge">—</span></div>
+      <div class="frame">
+        <img id="rightImg" src="/stream/right.mjpg" alt="Right camera stream" />
+      </div>
+      <div class="stats" id="rightStats">fps: — | sharp: — | frames: — | last: —</div>
     </div>
   </div>
 
@@ -51,12 +56,12 @@
         const rRes = right.resolution ? `${right.resolution.width}x${right.resolution.height}` : '—';
         document.getElementById('leftRes').textContent = lRes;
         document.getElementById('rightRes').textContent = rRes;
-        document.getElementById('leftFps').textContent = `fps: ${left.fps_target ?? '—'}`;
-        document.getElementById('rightFps').textContent = `fps: ${right.fps_target ?? '—'}`;
         const lTs = left.last_frame_ts ? new Date(left.last_frame_ts*1000).toLocaleTimeString() : '—';
         const rTs = right.last_frame_ts ? new Date(right.last_frame_ts*1000).toLocaleTimeString() : '—';
-        document.getElementById('leftStats').textContent = `Frames: ${left.frames ?? '—'} | Last: ${lTs}`;
-        document.getElementById('rightStats').textContent = `Frames: ${right.frames ?? '—'} | Last: ${rTs}`;
+        const lSharp = window.__lastSharpL ?? '—';
+        const rSharp = window.__lastSharpR ?? '—';
+        document.getElementById('leftStats').textContent = `fps: ${left.fps_target ?? '—'} | sharp: ${lSharp} | frames: ${left.frames ?? '—'} | last: ${lTs}`;
+        document.getElementById('rightStats').textContent = `fps: ${right.fps_target ?? '—'} | sharp: ${rSharp} | frames: ${right.frames ?? '—'} | last: ${rTs}`;
       } catch (e) {
         // ignore errors; keep UI responsive
       }
@@ -124,8 +129,8 @@
     function updateSharpness() {
       const lVal = computeSharpness(document.getElementById('leftImg'), ctxL, canvasL);
       const rVal = computeSharpness(document.getElementById('rightImg'), ctxR, canvasR);
-      if (lVal !== null) document.getElementById('leftSharp').textContent = `sharp: ${lVal}`;
-      if (rVal !== null) document.getElementById('rightSharp').textContent = `sharp: ${rVal}`;
+      if (lVal !== null) window.__lastSharpL = lVal;
+      if (rVal !== null) window.__lastSharpR = rVal;
     }
     // Run at ~5 Hz to balance CPU
     setInterval(updateSharpness, 200);
