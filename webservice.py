@@ -208,6 +208,7 @@ class WebRecorder:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._saved_count = 0
+        self._meta_records = []  # buffer metadata in memory for speed
 
     def _next_frame_index(self, left_path: Path) -> int:
         max_id = 0
@@ -238,14 +239,11 @@ class WebRecorder:
         self.right_path = self._workspace_path / self.right_folder
         self.left_path.mkdir(parents=True, exist_ok=True)
         self.right_path.mkdir(parents=True, exist_ok=True)
-        meta_path = self._workspace_path / "frames_time.json"
-        # Line-buffered writes so records appear during recording
-        self._metadata_file = meta_path.open("a", encoding="utf-8", buffering=1)
+        self._meta_path = self._workspace_path / "frames_time.json"
         self._frame_counter = self._next_frame_index(self.left_path)
         self._saved_count = 0
         self._stop.clear()
-        self._last_flush_ts = time.time()
-        self._since_flush = 0
+        self._meta_records = []
 
         def _loop():
             period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
@@ -271,20 +269,8 @@ class WebRecorder:
                         f.write(lj)
                     with open(self.right_path / f"{fid}.jpg", "wb") as f:
                         f.write(rj)
-                    if self._metadata_file is not None:
-                        rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
-                        self._metadata_file.write(json.dumps(rec) + "\n")
-                        self._since_flush += 1
-                        # Flush + fsync every write to ensure durability/visibility on all platforms
-                        try:
-                            self._metadata_file.flush()
-                            import os
-                            os.fsync(self._metadata_file.fileno())
-                        except Exception:
-                            pass
-                        self._last_flush_ts = time.time()
-                        if self._since_flush >= 50:
-                            self._since_flush = 0
+                    rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
+                    self._meta_records.append(rec)
                     self._saved_count += 2
                 except Exception:
                     # Continue even if a single write fails
@@ -298,12 +284,15 @@ class WebRecorder:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
-        if self._metadata_file is not None:
+        # Write buffered metadata on stop to minimize per-frame I/O
+        if self._meta_records and self._workspace_path is not None:
             try:
-                self._metadata_file.flush(); self._metadata_file.close()
+                with self._meta_path.open("w", encoding="utf-8") as f:
+                    for rec in self._meta_records:
+                        f.write(json.dumps(rec) + "\n")
             except Exception:
                 pass
-            self._metadata_file = None
+        self._meta_records = []
 
     def status(self) -> dict:
         return {
