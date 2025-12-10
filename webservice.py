@@ -258,6 +258,7 @@ class WebRecorder:
         last_saved_ts_ns: Optional[int] = None
 
         def _loop():
+            nonlocal last_saved_ts_ns
             period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
             next_t = time.monotonic()
             while not self._stop.is_set():
