@@ -68,6 +68,7 @@ class CameraReader:
         self._stop = threading.Event()
         self._latest_bgr: Optional[Any] = None
         self._latest_jpeg: Optional[bytes] = None
+        self._latest_ts_ns: Optional[int] = None
         self._last_ts: Optional[float] = None
         self._frame_count = 0
 
@@ -104,9 +105,11 @@ class CameraReader:
             if not ok:
                 continue
             jpeg_bytes = buf.tobytes()
+            ts_ns = time.time_ns()
             with self._lock:
                 self._latest_bgr = frame
                 self._latest_jpeg = jpeg_bytes
+                self._latest_ts_ns = ts_ns
                 self._last_ts = time.time()
                 self._frame_count += 1
 
@@ -114,6 +117,10 @@ class CameraReader:
         # Keep lock hold short; avoid re-encoding per request
         with self._lock:
             return self._latest_jpeg
+
+    def get_latest_jpeg_with_ts(self) -> Tuple[Optional[bytes], Optional[int]]:
+        with self._lock:
+            return self._latest_jpeg, self._latest_ts_ns
 
     def stats(self) -> dict:
         with self._lock:
@@ -251,17 +258,26 @@ class WebRecorder:
 
         def _loop():
             period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
-            next_t = time.time()
+            next_t = time.monotonic()
             while not self._stop.is_set():
-                now = time.time()
+                now = time.monotonic()
                 sleep_t = next_t - now
                 if sleep_t > 0:
                     self._stop.wait(sleep_t)
                     if self._stop.is_set():
                         break
-                lj = left.get_latest_jpeg()
-                rj = right.get_latest_jpeg()
-                ts = time.time()
+                else:
+                    # If we fell behind, reset schedule to avoid burst catch-up
+                    next_t = now
+                lj, lts = left.get_latest_jpeg_with_ts()
+                rj, rts = right.get_latest_jpeg_with_ts()
+                capture_ts_ns = None
+                if lts is not None and rts is not None:
+                    capture_ts_ns = min(lts, rts)
+                elif lts is not None:
+                    capture_ts_ns = lts
+                elif rts is not None:
+                    capture_ts_ns = rts
                 next_t += period
                 if lj is None or rj is None:
                     continue
@@ -273,7 +289,8 @@ class WebRecorder:
                         f.write(lj)
                     with open(self.right_path / f"{fid}.jpg", "wb") as f:
                         f.write(rj)
-                    rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
+                    ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
+                    rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
                     self._meta_records.append(rec)
                     self._saved_count += 2
                 except Exception:
@@ -342,9 +359,15 @@ class CaptureSession:
         return max_id
 
     def capture_once(self, left: CameraReader, right: CameraReader) -> dict:
-        lj = left.get_latest_jpeg()
-        rj = right.get_latest_jpeg()
-        ts = time.time()
+        lj, lts = left.get_latest_jpeg_with_ts()
+        rj, rts = right.get_latest_jpeg_with_ts()
+        capture_ts_ns = None
+        if lts is not None and rts is not None:
+            capture_ts_ns = min(lts, rts)
+        elif lts is not None:
+            capture_ts_ns = lts
+        elif rts is not None:
+            capture_ts_ns = rts
         if lj is None or rj is None:
             return {"ok": False, "error": "no frame"}
         self._frame_counter += 1
@@ -354,7 +377,8 @@ class CaptureSession:
                 f.write(lj)
             with open(self.right_path / f"{fid}.jpg", "wb") as f:
                 f.write(rj)
-            rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts*1_000_000_000)}
+            ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
+            rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
             self._metadata_file.write(json.dumps(rec) + "\n")
             try:
                 self._metadata_file.flush(); import os; os.fsync(self._metadata_file.fileno())
