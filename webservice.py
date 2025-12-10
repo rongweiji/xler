@@ -69,6 +69,7 @@ class CameraReader:
         self._latest_bgr: Optional[Any] = None
         self._latest_jpeg: Optional[bytes] = None
         self._latest_ts_ns: Optional[int] = None
+        self._latest_frame_id: int = 0
         self._last_ts: Optional[float] = None
         self._frame_count = 0
 
@@ -110,6 +111,7 @@ class CameraReader:
                 self._latest_bgr = frame
                 self._latest_jpeg = jpeg_bytes
                 self._latest_ts_ns = ts_ns
+                self._latest_frame_id += 1
                 self._last_ts = time.time()
                 self._frame_count += 1
 
@@ -121,6 +123,10 @@ class CameraReader:
     def get_latest_jpeg_with_ts(self) -> Tuple[Optional[bytes], Optional[int]]:
         with self._lock:
             return self._latest_jpeg, self._latest_ts_ns
+
+    def get_latest_jpeg_with_meta(self) -> Tuple[Optional[bytes], Optional[int], int]:
+        with self._lock:
+            return self._latest_jpeg, self._latest_ts_ns, self._latest_frame_id
 
     def stats(self) -> dict:
         with self._lock:
@@ -271,19 +277,25 @@ class WebRecorder:
                 else:
                     # If we fell behind, reset schedule to avoid burst catch-up
                     next_t = now + period
-                lj, lts = left.get_latest_jpeg_with_ts()
-                rj, rts = right.get_latest_jpeg_with_ts()
+                lj, lts, lfid = left.get_latest_jpeg_with_meta()
+                rj, rts, rfid = right.get_latest_jpeg_with_meta()
                 capture_ts_ns = None
+                capture_frame_id = None
                 if lts is not None and rts is not None:
                     capture_ts_ns = min(lts, rts)
+                    capture_frame_id = min(lfid, rfid)
                 elif lts is not None:
                     capture_ts_ns = lts
+                    capture_frame_id = lfid
                 elif rts is not None:
                     capture_ts_ns = rts
+                    capture_frame_id = rfid
                 next_t += period
                 if lj is None or rj is None:
                     continue
-                # Skip if we don't have a fresh frame timestamp to avoid duplicate stamps
+                # Skip if we don't have a fresh frame to avoid duplicate saves
+                if capture_frame_id is not None and capture_frame_id == last_saved_frame_id:
+                    continue
                 if capture_ts_ns is not None and last_saved_ts_ns is not None and capture_ts_ns <= last_saved_ts_ns:
                     continue
                 # Save pair
@@ -295,6 +307,7 @@ class WebRecorder:
                     with open(self.right_path / f"{fid}.jpg", "wb") as f:
                         f.write(rj)
                     ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
+                    last_saved_frame_id = capture_frame_id if capture_frame_id is not None else last_saved_frame_id
                     last_saved_ts_ns = ts_ns
                     rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
                     self._meta_records.append(rec)
