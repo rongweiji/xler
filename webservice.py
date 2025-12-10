@@ -102,15 +102,22 @@ class CameraReader:
             if not ret or frame is None:
                 continue
             # Pre-encode JPEG in the capture thread so HTTP handlers just reuse it
+            # Timestamp as close to capture as possible; prefer hardware/driver time
+            cap_ts_ns = None
+            if self._cap is not None:
+                hw_ts_ms = float(self._cap.get(cv2.CAP_PROP_POS_MSEC))
+                if hw_ts_ms > 0:
+                    cap_ts_ns = int(hw_ts_ms * 1_000_000)
+            if cap_ts_ns is None:
+                cap_ts_ns = time.monotonic_ns()
             ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
             if not ok:
                 continue
             jpeg_bytes = buf.tobytes()
-            ts_ns = time.time_ns()
             with self._lock:
                 self._latest_bgr = frame
                 self._latest_jpeg = jpeg_bytes
-                self._latest_ts_ns = ts_ns
+                self._latest_ts_ns = cap_ts_ns
                 self._latest_frame_id += 1
                 self._last_ts = time.time()
                 self._frame_count += 1
