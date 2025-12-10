@@ -54,17 +54,20 @@ def load_motor_config(config_path: str = "motors2/config.yaml", **overrides) -> 
 
 
 class CameraReader:
-    """Background frame reader that keeps the latest BGR frame and stats."""
+    """Background frame reader that keeps the latest BGR/JPEG frame and stats."""
 
-    def __init__(self, device: str | int, resolution: Tuple[int, int], fps: float) -> None:
+    def __init__(self, device: str | int, resolution: Tuple[int, int], fps: float,
+                 jpeg_quality: int = 90) -> None:
         self.device = device
         self.width, self.height = resolution
         self.fps = fps
+        self.jpeg_quality = int(jpeg_quality)
         self._cap: Optional[Any] = None
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._latest_bgr: Optional[Any] = None
+        self._latest_jpeg: Optional[bytes] = None
         self._last_ts: Optional[float] = None
         self._frame_count = 0
 
@@ -96,20 +99,21 @@ class CameraReader:
             next_t += period
             if not ret or frame is None:
                 continue
+            # Pre-encode JPEG in the capture thread so HTTP handlers just reuse it
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+            if not ok:
+                continue
+            jpeg_bytes = buf.tobytes()
             with self._lock:
                 self._latest_bgr = frame
+                self._latest_jpeg = jpeg_bytes
                 self._last_ts = time.time()
                 self._frame_count += 1
 
     def get_latest_jpeg(self) -> Optional[bytes]:
+        # Keep lock hold short; avoid re-encoding per request
         with self._lock:
-            frame = self._latest_bgr
-        if frame is None:
-            return None
-        ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-        if not ok:
-            return None
-        return buf.tobytes()
+            return self._latest_jpeg
 
     def stats(self) -> dict:
         with self._lock:
