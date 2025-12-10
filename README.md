@@ -113,6 +113,13 @@ Notes:
 - Run the web service separately from `xler.py` recording to avoid camera conflicts.
 - FPS/resolution are read from `xler.yaml` (`camera.fps`, `camera.resolution`).
 
+### Hitting 30 FPS on the web service (tested on Raspberry Pi)
+- Set `camera.fps: 30` and a sane resolution (e.g., default `640x480`) in `xler.yaml`.
+- Processing chain we use to hold FPS end-to-end: (1) each camera has a dedicated capture thread that pulls frames at the device rate, (2) that thread JPEG-encodes once per frame and caches the latest buffer, (3) HTTP handlers only read and send the cached JPEG (no per-request capture or re-encode), and (4) locks are kept short so the handler path stays non-blocking.
+- Ensure the cameras are set to MJPEG in `xler.yaml` (default) to avoid CPU-heavy format conversion.
+- Avoid running other recorders on the same devices at the same time.
+- If you still see drops, lower `jpeg_quality` in code or reduce resolution; slow storage (SD/NAS) and heavy logging can also throttle throughput.
+
 ## Upgrading Dependencies
 Inside the activated venv:
 ```bash
