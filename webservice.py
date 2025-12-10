@@ -255,6 +255,7 @@ class WebRecorder:
         self._saved_count = 0
         self._stop.clear()
         self._meta_records = []
+        last_saved_ts_ns: Optional[int] = None
 
         def _loop():
             period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
@@ -268,7 +269,7 @@ class WebRecorder:
                         break
                 else:
                     # If we fell behind, reset schedule to avoid burst catch-up
-                    next_t = now
+                    next_t = now + period
                 lj, lts = left.get_latest_jpeg_with_ts()
                 rj, rts = right.get_latest_jpeg_with_ts()
                 capture_ts_ns = None
@@ -281,6 +282,9 @@ class WebRecorder:
                 next_t += period
                 if lj is None or rj is None:
                     continue
+                # Skip if we don't have a fresh frame timestamp to avoid duplicate stamps
+                if capture_ts_ns is not None and last_saved_ts_ns is not None and capture_ts_ns <= last_saved_ts_ns:
+                    continue
                 # Save pair
                 self._frame_counter += 1
                 fid = f"{self._frame_counter:07d}"
@@ -290,6 +294,7 @@ class WebRecorder:
                     with open(self.right_path / f"{fid}.jpg", "wb") as f:
                         f.write(rj)
                     ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
+                    last_saved_ts_ns = ts_ns
                     rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
                     self._meta_records.append(rec)
                     self._saved_count += 2
