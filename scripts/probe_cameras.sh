@@ -37,8 +37,7 @@ for dev in /dev/video*; do
   fi
 
   # Extract the list of format fourcc codes.
-  fmts=$(printf "%s\n" "$v4l2_out" | awk 'match($0, /\[[0-9]+\]:\s*'\''([A-Z0-9]{3,4})'\'') {print substr($0, RSTART+3, RLENGTH-3)}')
-  fmts=$(echo "$fmts" | tr '\n' ',' | sed 's/,$//')
+  fmts=$(printf "%s\n" "$v4l2_out" | sed -n "s/^[[:space:]]*\\[[0-9]\\+\\]: '\\([A-Z0-9]\\{3,4\\}\\)'.*/\\1/p" | paste -sd, -)
   [ -z "$fmts" ] && fmts="(none)"
 
   grab_result="(skip)"
