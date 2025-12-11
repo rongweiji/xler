@@ -62,6 +62,15 @@ class StereoCameraRecorder:
         self._lock = threading.Lock()
         self._left_capture: Optional[Any] = None
         self._right_capture: Optional[Any] = None
+        self._left_thread: Optional[threading.Thread] = None
+        self._right_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._latest_left_frame: Optional[Any] = None
+        self._latest_right_frame: Optional[Any] = None
+        self._latest_left_id = 0
+        self._latest_right_id = 0
+        self._used_left_id = 0
+        self._used_right_id = 0
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="xler_cam")
         self._futures: list[Future] = []
         self._started = False
@@ -109,11 +118,34 @@ class StereoCameraRecorder:
 
             self._left_capture = self._open_capture(self.left_device)
             self._right_capture = self._open_capture(self.right_device)
+            self._latest_left_frame = None
+            self._latest_right_frame = None
+            self._latest_left_id = 0
+            self._latest_right_id = 0
+            self._used_left_id = 0
+            self._used_right_id = 0
 
             if not self._left_capture.isOpened():
                 raise RuntimeError(f"Failed to open left camera device '{self.left_device}'")
             if not self._right_capture.isOpened():
                 raise RuntimeError(f"Failed to open right camera device '{self.right_device}'")
+
+            # Start background readers to keep fresh frames without blocking control loop.
+            self._stop_event.clear()
+            self._left_thread = threading.Thread(
+                target=self._capture_loop,
+                args=("left", self._left_capture),
+                name="cam_left_reader",
+                daemon=True,
+            )
+            self._right_thread = threading.Thread(
+                target=self._capture_loop,
+                args=("right", self._right_capture),
+                name="cam_right_reader",
+                daemon=True,
+            )
+            self._left_thread.start()
+            self._right_thread.start()
 
             self._started = True
 
@@ -126,7 +158,15 @@ class StereoCameraRecorder:
         with self._lock:
             if not self._started:
                 return
+            self._stop_event.set()
+        # Join reader threads outside the lock to avoid deadlocks.
+        for t in (self._left_thread, self._right_thread):
+            if t is not None:
+                t.join(timeout=1.0)
+        self._left_thread = None
+        self._right_thread = None
 
+        with self._lock:
             if self._left_capture is not None:
                 self._left_capture.release()
                 self._left_capture = None
@@ -168,14 +208,23 @@ class StereoCameraRecorder:
         if not self._started:
             return
 
-        # Avoid blocking the control loop longer than necessary.
-        ret_left, frame_left = self._read_frame(self._left_capture)
-        ret_right, frame_right = self._read_frame(self._right_capture)
+        # Grab the latest frames captured asynchronously.
+        with self._lock:
+            frame_left = self._latest_left_frame
+            frame_right = self._latest_right_frame
+            left_id = self._latest_left_id
+            right_id = self._latest_right_id
+            used_left = self._used_left_id
+            used_right = self._used_right_id
 
-        if not ret_left or frame_left is None:
+        if frame_left is None or frame_right is None:
             return
-        if not ret_right or frame_right is None:
+        # Skip if nothing new since last save to avoid duplicates.
+        if left_id == used_left and right_id == used_right:
             return
+        with self._lock:
+            self._used_left_id = left_id
+            self._used_right_id = right_id
 
         # Use a monotonic 7-digit counter for filenames
         with self._lock:
@@ -327,6 +376,20 @@ class StereoCameraRecorder:
     def _save_jpeg(self, frame_bgr, path: Path) -> None:
         # Use OpenCV to encode/write JPEG directly to avoid Pillow conversions.
         cv2.imwrite(str(path), frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+
+    def _capture_loop(self, side: str, capture: Any) -> None:
+        """Continuously read from a capture and cache the latest frame."""
+        next_id_attr = "_latest_left_id" if side == "left" else "_latest_right_id"
+        frame_attr = "_latest_left_frame" if side == "left" else "_latest_right_frame"
+        while not self._stop_event.is_set():
+            ret, frame = capture.read()
+            if not ret or frame is None:
+                # Avoid tight spin if the camera hiccups.
+                self._stop_event.wait(0.005)
+                continue
+            with self._lock:
+                setattr(self, next_id_attr, getattr(self, next_id_attr) + 1)
+                setattr(self, frame_attr, frame)
 
 
 __all__ = ["StereoCameraRecorder"]
