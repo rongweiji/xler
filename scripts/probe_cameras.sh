@@ -45,17 +45,19 @@ for dev in /dev/video*; do
   grab_result="(skip)"
   if [ "$have_ffmpeg" -eq 1 ]; then
     outfile="$tmpdir/$(basename "$dev").jpg"
-    if grab_out=$(timeout 6s ffmpeg -loglevel error -y -f v4l2 -input_format mjpeg -framerate 5 -video_size 640x480 -i "$dev" -frames:v 1 "$outfile" 2>&1); then
+    # Try MJPEG first
+    grab_out=""
+    if grab_out=$(timeout 6s ffmpeg -nostdin -hide_banner -loglevel error -y -f v4l2 -input_format mjpeg -framerate 5 -video_size 640x480 -i "$dev" -frames:v 1 "$outfile" 2>&1); then
       grab_result="OK (mjpeg) -> $outfile"
       usable+=("$dev")
     else
-      # If MJPEG fails, try a quick YUYV attempt to disambiguate format issues.
-      if grab2_out=$(timeout 6s ffmpeg -loglevel error -y -f v4l2 -input_format yuyv422 -framerate 5 -video_size 640x480 -i "$dev" -frames:v 1 "$outfile" 2>&1); then
+      # Try YUYV
+      if grab2_out=$(timeout 6s ffmpeg -nostdin -hide_banner -loglevel error -y -f v4l2 -input_format yuyv422 -framerate 5 -video_size 640x480 -i "$dev" -frames:v 1 "$outfile" 2>&1); then
         grab_result="OK (yuyv422) -> $outfile"
         usable+=("$dev")
       else
-        # Take the first line of the last error for brevity.
-        err_line=$(printf "%s\n%s\n" "$grab_out" "$grab2_out" | grep -m1 -v '^$' || true)
+        err_line=$(printf "%s\n%s\n" "${grab_out:-}" "${grab2_out:-}" | grep -m1 -v '^$' || true)
+        [ -z "$err_line" ] && err_line="(no error text)"
         grab_result="FAIL: $err_line"
       fi
     fi
