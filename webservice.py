@@ -25,7 +25,6 @@ except ImportError as exc:
 from motors2 import Motor, MotorNormMode, find_serial_port
 from motors2.feetech import FeetechMotorsBus
 from motors2.base_controller import LeKiwiBaseController
-from camera_recorder import StereoCameraRecorder
 
 app = Flask(__name__, template_folder="templates")
 
@@ -208,36 +207,70 @@ def api_stats():
     })
 
 
-class StereoRecorderRunner:
-    """Thin wrapper that reuses StereoCameraRecorder for saving in the web app."""
+class WebRecorder:
+    """Server-side recorder reusing frames from CameraReader for saving.
 
-    def __init__(self, *, left_device: str | int, right_device: str | int, output_root: Path,
-                 left_folder: str, right_folder: str, resolution: Tuple[int, int],
-                 fps: float, pixel_format: str = "mjpeg") -> None:
+    Mirrors the folder structure and metadata style used by camera_recorder.py.
+    """
+
+    def __init__(self, output_root: Path, left_folder: str, right_folder: str,
+                 resolution: Tuple[int, int], fps: float) -> None:
+        self.output_root = output_root
+        self.left_folder = left_folder
+        self.right_folder = right_folder
+        self.resolution = resolution
         self.fps = float(fps)
-        self._recorder = StereoCameraRecorder(
-            left_device=left_device,
-            right_device=right_device,
-            output_root=output_root,
-            left_folder=left_folder,
-            right_folder=right_folder,
-            resolution=resolution,
-            fps=int(self.fps),
-            pixel_format=pixel_format,
-        )
+        self._workspace_path: Optional[Path] = None
+        self._metadata_file = None
+        self._frame_counter = 0
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
-        self._frame_index = 0
+        self._saved_count = 0
+        self._meta_records = []  # buffer metadata in memory for speed
 
-    def start(self) -> None:
+    def _next_frame_index(self, left_path: Path) -> int:
+        max_id = 0
+        for p in left_path.glob("*.jpg"):
+            s = p.stem
+            if s.isdigit():
+                max_id = max(max_id, int(s))
+        return max_id
+
+    def start(self, left: CameraReader, right: CameraReader) -> None:
         if self._thread and self._thread.is_alive():
             return
-        self._recorder.start()
+        # Prepare workspace
+        next_idx = 1
+        if self.output_root.exists():
+            indices = []
+            for child in self.output_root.iterdir():
+                if child.is_dir() and child.name.startswith("workspace"):
+                    suf = child.name[len("workspace"):]
+                    if suf.isdigit():
+                        indices.append(int(suf))
+            if indices:
+                next_idx = max(indices) + 1
+        ws_name = f"workspace{next_idx}"
+        self._workspace_path = self.output_root / ws_name
+        self._workspace_path.mkdir(parents=True, exist_ok=True)
+        self.left_path = self._workspace_path / self.left_folder
+        self.right_path = self._workspace_path / self.right_folder
+        self.left_path.mkdir(parents=True, exist_ok=True)
+        self.right_path.mkdir(parents=True, exist_ok=True)
+        self._meta_path = self._workspace_path / "frames_time.json"
+        self._frame_counter = self._next_frame_index(self.left_path)
+        self._saved_count = 0
         self._stop.clear()
+        self._meta_records = []
+        last_saved_ts_ns: Optional[int] = None
+        last_saved_frame_id: Optional[int] = None
 
-        def _loop() -> None:
-            period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0 / 30.0
+        def _loop():
+            nonlocal last_saved_ts_ns
+            nonlocal last_saved_frame_id
+            period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
             next_t = time.monotonic()
+            min_spacing_ns = int((1.0 / max(1e-3, self.fps)) * 0.5 * 1_000_000_000)  # half-period guard
             while not self._stop.is_set():
                 now = time.monotonic()
                 sleep_t = next_t - now
@@ -246,15 +279,50 @@ class StereoRecorderRunner:
                     if self._stop.is_set():
                         break
                 else:
-                    next_t = now
-                self._frame_index += 1
-                try:
-                    self._recorder.maybe_capture(self._frame_index, time.time())
-                except Exception:
-                    pass
+                    # If we fell behind, reset schedule to avoid burst catch-up
+                    next_t = now + period
+                lj, lts, lfid = left.get_latest_jpeg_with_meta()
+                rj, rts, rfid = right.get_latest_jpeg_with_meta()
+                capture_ts_ns = None
+                capture_frame_id = None
+                if lts is not None and rts is not None:
+                    capture_ts_ns = min(lts, rts)
+                    capture_frame_id = min(lfid, rfid)
+                elif lts is not None:
+                    capture_ts_ns = lts
+                    capture_frame_id = lfid
+                elif rts is not None:
+                    capture_ts_ns = rts
+                    capture_frame_id = rfid
                 next_t += period
+                if lj is None or rj is None:
+                    continue
+                # Skip if we don't have a fresh frame to avoid duplicate saves
+                if capture_frame_id is not None and capture_frame_id == last_saved_frame_id:
+                    continue
+                if capture_ts_ns is not None and last_saved_ts_ns is not None and capture_ts_ns <= last_saved_ts_ns:
+                    continue
+                if capture_ts_ns is not None and last_saved_ts_ns is not None and (capture_ts_ns - last_saved_ts_ns) < min_spacing_ns:
+                    continue
+                # Save pair
+                self._frame_counter += 1
+                fid = f"{self._frame_counter:07d}"
+                try:
+                    with open(self.left_path / f"{fid}.jpg", "wb") as f:
+                        f.write(lj)
+                    with open(self.right_path / f"{fid}.jpg", "wb") as f:
+                        f.write(rj)
+                    ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
+                    last_saved_frame_id = capture_frame_id if capture_frame_id is not None else last_saved_frame_id
+                    last_saved_ts_ns = ts_ns
+                    rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
+                    self._meta_records.append(rec)
+                    self._saved_count += 2
+                except Exception:
+                    # Continue even if a single write fails
+                    pass
 
-        self._thread = threading.Thread(target=_loop, name="web_recorder_runner", daemon=True)
+        self._thread = threading.Thread(target=_loop, name="web_recorder", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -262,22 +330,26 @@ class StereoRecorderRunner:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
-        try:
-            self._recorder.stop()
-        except Exception:
-            pass
+        # Write buffered metadata on stop to minimize per-frame I/O
+        if self._meta_records and self._workspace_path is not None:
+            try:
+                with self._meta_path.open("w", encoding="utf-8") as f:
+                    for rec in self._meta_records:
+                        f.write(json.dumps(rec) + "\n")
+            except Exception:
+                pass
+        self._meta_records = []
 
     def status(self) -> dict:
-        workspace = getattr(self._recorder, "_workspace_path", None)
-        frame_counter = getattr(self._recorder, "_frame_counter", 0)
         return {
             "recording": bool(self._thread and self._thread.is_alive()),
-            "workspace": str(workspace) if workspace else None,
-            "left_folder": getattr(self._recorder, "left_folder", None),
-            "right_folder": getattr(self._recorder, "right_folder", None),
-            "output_root": str(getattr(self._recorder, "output_root", "")),
+            "workspace": str(self._workspace_path) if self._workspace_path else None,
+            "saved_files": self._saved_count,
             "fps": self.fps,
-            "frames_recorded": frame_counter,
+            "resolution": {"width": self.resolution[0], "height": self.resolution[1]},
+            "output_root": str(self.output_root),
+            "left_folder": self.left_folder,
+            "right_folder": self.right_folder,
         }
 
 
@@ -458,8 +530,10 @@ def api_record_start():
     global recorder, left_reader, right_reader
     if recorder and recorder.status().get("recording"):
         return jsonify({"ok": True, "already": True, "status": recorder.status()})
+    if not left_reader or not right_reader:
+        return jsonify({"ok": False, "error": "cameras not initialized"}), 503
     # Recorder is created in main with proper config; just start it
-    recorder.start()
+    recorder.start(left_reader, right_reader)
     return jsonify({"ok": True, "status": recorder.status()})
 
 
@@ -559,15 +633,11 @@ def main():
     output_root = Path(camera.get("output_dir", "recordings"))
     left_folder = left_cfg.get("folder", "front_stereo_cam_left")
     right_folder = right_cfg.get("folder", "front_stereo_cam_right")
-    pixel_format = camera.get("pixel_format", "mjpeg")
-    recorder = StereoRecorderRunner(output_root=output_root,
-                                    left_device=left_dev,
-                                    right_device=right_dev,
-                                    left_folder=left_folder,
-                                    right_folder=right_folder,
-                                    resolution=resolution,
-                                    fps=fps,
-                                    pixel_format=pixel_format)
+    recorder = WebRecorder(output_root=output_root,
+                           left_folder=left_folder,
+                           right_folder=right_folder,
+                           resolution=resolution,
+                           fps=fps)
 
     # Prepare capture session using a persistent calibration workspace
     global capture_session
