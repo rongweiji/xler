@@ -43,6 +43,7 @@ class StereoCameraRecorder:
         resolution: str | Tuple[int, int] = "1280x720",
         fps: int = 30,
         pixel_format: str = "mjpeg",
+        max_pending_saves: int = 32,
     ) -> None:
         if cv2 is None:
             raise RuntimeError(
@@ -82,6 +83,8 @@ class StereoCameraRecorder:
         self._frame_counter = 0
         self._metadata_path: Optional[Path] = None
         self._metadata_file: Optional[IO[str]] = None
+        # Keep the save queue bounded to avoid OOM on low-memory devices.
+        self._max_pending_saves = max(1, int(max_pending_saves))
 
     def start(self) -> None:
         """Open camera devices and prepare output directories."""
@@ -226,6 +229,13 @@ class StereoCameraRecorder:
             self._used_left_id = left_id
             self._used_right_id = right_id
 
+        # Drop if too many saves are pending to avoid unbounded memory growth.
+        pending = [f for f in self._futures if not f.done()]
+        if len(pending) >= self._max_pending_saves:
+            self._futures = pending
+            return
+        self._futures = pending
+
         # Use a monotonic 7-digit counter for filenames
         with self._lock:
             self._frame_counter += 1
@@ -261,6 +271,11 @@ class StereoCameraRecorder:
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         capture.set(cv2.CAP_PROP_FPS, float(self.fps))
+        # Keep driver buffer small to lower latency and RAM use.
+        try:
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
     def _next_frame_index(self) -> int:
         """

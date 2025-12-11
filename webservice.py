@@ -231,6 +231,7 @@ class WebRecorder:
         self._executor: Optional[ThreadPoolExecutor] = None
         self._futures: list[Future] = []
         self._lock = threading.Lock()
+        self._max_pending_saves = 128
 
     def _next_frame_index(self, left_path: Path) -> int:
         max_id = 0
@@ -328,10 +329,14 @@ class WebRecorder:
                         pass
 
                 if self._executor is not None:
+                    # Drop if too many saves are pending to avoid unbounded memory use.
+                    pending = [f for f in self._futures if not f.done()]
+                    if len(pending) >= self._max_pending_saves:
+                        self._futures = pending
+                        continue
                     fut = self._executor.submit(_save_pair, lj, rj, fid)
-                    self._futures.append(fut)
-                    if len(self._futures) > 512:
-                        self._futures = [f for f in self._futures if not f.done()]
+                    pending.append(fut)
+                    self._futures = pending
 
                 last_saved_frame_id = capture_frame_id if capture_frame_id is not None else last_saved_frame_id
                 last_saved_ts_ns = ts_ns
