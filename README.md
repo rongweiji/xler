@@ -98,6 +98,7 @@ Ensure camera devices are set in `xler.yaml` under `camera.left.device` and `cam
 
 ### Run
 ```bash
+source .venv/bin/activate
 python webservice.py --host 0.0.0.0 --port 8088
 ```
 
