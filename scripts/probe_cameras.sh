@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Quick probe to find which /dev/videoN nodes can actually stream.
-# Run on the Raspberry Pi: chmod +x scripts/probe_cameras.sh && ./scripts/probe_cameras.sh
+# Concise probe for which /dev/video* nodes can actually stream.
+# Run on the Pi: chmod +x scripts/probe_cameras.sh && ./scripts/probe_cameras.sh
 
 set -euo pipefail
 
@@ -15,41 +15,51 @@ command -v ffmpeg >/dev/null 2>&1 || have_ffmpeg=0
 tmpdir=$(mktemp -d /tmp/camprobe.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT
 
-printf "Probing video nodes...\n\n"
+echo "Probing /dev/video* (short summary)..."
+echo
+
+printf "%-12s %-8s %-20s %-30s\n" "Device" "Capture?" "Formats" "ffmpeg grab"
+printf "%-12s %-8s %-20s %-30s\n" "------------" "--------" "--------------------" "------------------------------"
 
 for dev in /dev/video*; do
   [ -e "$dev" ] || continue
-  printf "=== %s ===\n" "$dev"
 
-  # List formats; this also tells us whether the node supports capture.
   if ! v4l2_out=$(v4l2-ctl -d "$dev" --list-formats-ext 2>&1); then
-    printf "  v4l2-ctl failed: %s\n\n" "$v4l2_out"
+    printf "%-12s %-8s %-20s %-30s\n" "$dev" "no" "-" "v4l2-ctl failed"
     continue
   fi
 
   if grep -q "Video Capture" <<<"$v4l2_out"; then
-    printf "  Supports Video Capture\n"
+    capture="yes"
   else
-    printf "  No Video Capture interface (likely metadata/control node)\n\n"
+    printf "%-12s %-8s %-20s %-30s\n" "$dev" "no" "-" "control/metadata node"
     continue
   fi
 
-  printf "  Formats:\n"
-  printf "%s\n" "$v4l2_out" | sed 's/^/    /'
+  # Extract the list of format fourcc codes.
+  fmts=$(printf "%s\n" "$v4l2_out" | awk 'match($0, /\[[0-9]+\]:\s*'\''([A-Z0-9]{3,4})'\'') {print substr($0, RSTART+3, RLENGTH-3)}')
+  fmts=$(echo "$fmts" | tr '\n' ',' | sed 's/,$//')
+  [ -z "$fmts" ] && fmts="(none)"
 
-  # Optional: attempt a single frame grab via ffmpeg to verify streaming.
+  grab_result="(skip)"
   if [ "$have_ffmpeg" -eq 1 ]; then
     outfile="$tmpdir/$(basename "$dev").jpg"
-    if timeout 6s ffmpeg -loglevel error -y -f v4l2 -i "$dev" -frames:v 1 "$outfile"; then
-      printf "  ffmpeg test: OK (saved %s)\n" "$outfile"
+    if grab_out=$(timeout 6s ffmpeg -loglevel error -y -f v4l2 -input_format mjpeg -framerate 5 -video_size 640x480 -i "$dev" -frames:v 1 "$outfile" 2>&1); then
+      grab_result="OK -> $outfile"
     else
-      printf "  ffmpeg test: FAILED (could not grab a frame)\n"
+      # If MJPEG fails, try a quick YUYV attempt to disambiguate format issues.
+      if grab2_out=$(timeout 6s ffmpeg -loglevel error -y -f v4l2 -input_format yuyv422 -framerate 5 -video_size 640x480 -i "$dev" -frames:v 1 "$outfile" 2>&1); then
+        grab_result="OK (yuyv422) -> $outfile"
+      else
+        # Take the first line of the last error for brevity.
+        err_line=$(printf "%s\n%s\n" "$grab_out" "$grab2_out" | head -n 1)
+        grab_result="FAIL: $err_line"
+      fi
     fi
-  else
-    printf "  ffmpeg not installed; skipping frame grab test\n"
   fi
 
-  printf "\n"
+  printf "%-12s %-8s %-20s %-30s\n" "$dev" "$capture" "$fmts" "$grab_result"
 done
 
-printf "Done. Temporary files were in %s\n" "$tmpdir"
+echo
+echo "Done. Temporary files were in $tmpdir"
