@@ -102,14 +102,8 @@ class CameraReader:
             if not ret or frame is None:
                 continue
             # Pre-encode JPEG in the capture thread so HTTP handlers just reuse it
-            # Timestamp as close to capture as possible; prefer hardware/driver time
-            cap_ts_ns = None
-            if self._cap is not None:
-                hw_ts_ms = float(self._cap.get(cv2.CAP_PROP_POS_MSEC))
-                if hw_ts_ms > 0:
-                    cap_ts_ns = int(hw_ts_ms * 1_000_000)
-            if cap_ts_ns is None:
-                cap_ts_ns = time.monotonic_ns()
+            # Timestamp as close to capture as possible using monotonic clock (driver timestamps are unreliable on many UVC cameras)
+            cap_ts_ns = time.monotonic_ns()
             ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
             if not ok:
                 continue
@@ -276,6 +270,7 @@ class WebRecorder:
             nonlocal last_saved_frame_id
             period = 1.0 / max(1e-3, self.fps) if self.fps > 0 else 1.0/30.0
             next_t = time.monotonic()
+            min_spacing_ns = int((1.0 / max(1e-3, self.fps)) * 0.5 * 1_000_000_000)  # half-period guard
             while not self._stop.is_set():
                 now = time.monotonic()
                 sleep_t = next_t - now
@@ -306,6 +301,8 @@ class WebRecorder:
                 if capture_frame_id is not None and capture_frame_id == last_saved_frame_id:
                     continue
                 if capture_ts_ns is not None and last_saved_ts_ns is not None and capture_ts_ns <= last_saved_ts_ns:
+                    continue
+                if capture_ts_ns is not None and last_saved_ts_ns is not None and (capture_ts_ns - last_saved_ts_ns) < min_spacing_ns:
                     continue
                 # Save pair
                 self._frame_counter += 1
