@@ -12,6 +12,7 @@ import json
 import os
 from typing import Optional, Tuple, Any
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, Future, wait
 
 import yaml
 from flask import Flask, Response, render_template, jsonify, request
@@ -227,6 +228,9 @@ class WebRecorder:
         self._stop = threading.Event()
         self._saved_count = 0
         self._meta_records = []  # buffer metadata in memory for speed
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._futures: list[Future] = []
+        self._lock = threading.Lock()
 
     def _next_frame_index(self, left_path: Path) -> int:
         max_id = 0
@@ -262,6 +266,8 @@ class WebRecorder:
         self._saved_count = 0
         self._stop.clear()
         self._meta_records = []
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="web_rec_save")
+        self._futures = []
         last_saved_ts_ns: Optional[int] = None
         last_saved_frame_id: Optional[int] = None
 
@@ -307,20 +313,29 @@ class WebRecorder:
                 # Save pair
                 self._frame_counter += 1
                 fid = f"{self._frame_counter:07d}"
-                try:
-                    with open(self.left_path / f"{fid}.jpg", "wb") as f:
-                        f.write(lj)
-                    with open(self.right_path / f"{fid}.jpg", "wb") as f:
-                        f.write(rj)
-                    ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
-                    last_saved_frame_id = capture_frame_id if capture_frame_id is not None else last_saved_frame_id
-                    last_saved_ts_ns = ts_ns
-                    rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
-                    self._meta_records.append(rec)
-                    self._saved_count += 2
-                except Exception:
-                    # Continue even if a single write fails
-                    pass
+                ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
+                rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
+
+                def _save_pair(left_bytes: bytes, right_bytes: bytes, fname: str) -> None:
+                    try:
+                        with open(self.left_path / f"{fname}.jpg", "wb") as f:
+                            f.write(left_bytes)
+                        with open(self.right_path / f"{fname}.jpg", "wb") as f:
+                            f.write(right_bytes)
+                        with self._lock:
+                            self._saved_count += 2
+                    except Exception:
+                        pass
+
+                if self._executor is not None:
+                    fut = self._executor.submit(_save_pair, lj, rj, fid)
+                    self._futures.append(fut)
+                    if len(self._futures) > 512:
+                        self._futures = [f for f in self._futures if not f.done()]
+
+                last_saved_frame_id = capture_frame_id if capture_frame_id is not None else last_saved_frame_id
+                last_saved_ts_ns = ts_ns
+                self._meta_records.append(rec)
 
         self._thread = threading.Thread(target=_loop, name="web_recorder", daemon=True)
         self._thread.start()
@@ -330,6 +345,12 @@ class WebRecorder:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+        if self._futures:
+            wait([f for f in self._futures if not f.done()], timeout=2.0)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None
+        self._futures = []
         # Write buffered metadata on stop to minimize per-frame I/O
         if self._meta_records and self._workspace_path is not None:
             try:
