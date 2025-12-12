@@ -17,7 +17,7 @@ camera:
   enabled: false              # Set to true to record during control sessions
   output_dir: recordings      # Root directory for saved images
   resolution: "640x480"      # Capture resolution (WIDTHxHEIGHT)
-  fps: 20                     # Frame rate to request from camera
+  fps: 10                     # Frame rate to request from camera
   pixel_format: mjpeg         # mjpeg, yuyv, etc.
   left:
     device: /dev/video1
