@@ -259,7 +259,8 @@ def main():
                 recorder = None
                 record_cameras = False
         if recorder is not None:
-            # Run camera capture on its own thread so motor control timing is unaffected.
+            # Run camera capture triggering on its own thread so motor control timing is unaffected.
+            # The recorder itself caches latest frames in background and saves asynchronously.
             camera_stop_event = threading.Event()
 
             def _camera_loop(rec: StereoCameraRecorder, stop_event: threading.Event, fps_value) -> None:

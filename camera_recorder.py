@@ -44,6 +44,8 @@ class StereoCameraRecorder:
         fps: int = 30,
         pixel_format: str = "mjpeg",
         max_pending_saves: int = 32,
+        jpeg_quality: int = 90,
+        metadata_flush_every: int = 200,
     ) -> None:
         if cv2 is None:
             raise RuntimeError(
@@ -60,14 +62,20 @@ class StereoCameraRecorder:
         self.fps = fps
         self.pixel_format = pixel_format.lower()
 
-        self._lock = threading.Lock()
+        self.jpeg_quality = int(jpeg_quality)
+        self._metadata_flush_every = max(1, int(metadata_flush_every))
+
+        # Keep capture/cache independent from disk I/O.
+        self._frame_lock = threading.Lock()
+        self._meta_lock = threading.Lock()
         self._left_capture: Optional[Any] = None
         self._right_capture: Optional[Any] = None
         self._left_thread: Optional[threading.Thread] = None
         self._right_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._latest_left_frame: Optional[Any] = None
-        self._latest_right_frame: Optional[Any] = None
+        # Cache only the latest encoded JPEG bytes so saving doesn't re-encode.
+        self._latest_left_jpeg: Optional[bytes] = None
+        self._latest_right_jpeg: Optional[bytes] = None
         self._latest_left_id = 0
         self._latest_right_id = 0
         self._used_left_id = 0
@@ -83,12 +91,13 @@ class StereoCameraRecorder:
         self._frame_counter = 0
         self._metadata_path: Optional[Path] = None
         self._metadata_file: Optional[IO[str]] = None
+        self._meta_records: list[str] = []
         # Keep the save queue bounded to avoid OOM on low-memory devices.
         self._max_pending_saves = max(1, int(max_pending_saves))
 
     def start(self) -> None:
         """Open camera devices and prepare output directories."""
-        with self._lock:
+        with self._frame_lock:
             if self._started:
                 return
 
@@ -116,17 +125,21 @@ class StereoCameraRecorder:
 
             # JSON mapping file in workspace root
             self._metadata_path = self._workspace_path / "frames_time.json"
-            self._metadata_file = self._metadata_path.open("a", encoding="utf-8")
+            # Large buffering reduces per-line write overhead (especially on SD cards).
+            self._metadata_file = self._metadata_path.open("a", encoding="utf-8", buffering=1024 * 1024)
             self._frame_counter = self._next_frame_index()
 
             self._left_capture = self._open_capture(self.left_device)
             self._right_capture = self._open_capture(self.right_device)
-            self._latest_left_frame = None
-            self._latest_right_frame = None
+            self._latest_left_jpeg = None
+            self._latest_right_jpeg = None
             self._latest_left_id = 0
             self._latest_right_id = 0
             self._used_left_id = 0
             self._used_right_id = 0
+
+            with self._meta_lock:
+                self._meta_records.clear()
 
             if not self._left_capture.isOpened():
                 raise RuntimeError(f"Failed to open left camera device '{self.left_device}'")
@@ -158,7 +171,7 @@ class StereoCameraRecorder:
         drain_timeout: seconds to wait for outstanding save tasks before
         cancelling pending ones. Keeps shutdown responsive on slow disks.
         """
-        with self._lock:
+        with self._frame_lock:
             if not self._started:
                 return
             self._stop_event.set()
@@ -169,7 +182,7 @@ class StereoCameraRecorder:
         self._left_thread = None
         self._right_thread = None
 
-        with self._lock:
+        with self._frame_lock:
             if self._left_capture is not None:
                 self._left_capture.release()
                 self._left_capture = None
@@ -188,7 +201,16 @@ class StereoCameraRecorder:
         # Request shutdown without blocking; cancel not yet started tasks.
         self._executor.shutdown(wait=False, cancel_futures=True)
 
-        with self._lock:
+        # Flush any buffered metadata.
+        with self._meta_lock:
+            if self._metadata_file is not None and self._meta_records:
+                try:
+                    self._metadata_file.write("".join(self._meta_records))
+                    self._meta_records.clear()
+                except OSError:
+                    pass
+
+        with self._frame_lock:
             self._futures.clear()
             if self._metadata_file is not None:
                 try:
@@ -197,6 +219,9 @@ class StereoCameraRecorder:
                 except OSError:
                     pass
                 self._metadata_file = None
+
+            with self._meta_lock:
+                self._meta_records.clear()
 
             self._started = False
 
@@ -212,20 +237,20 @@ class StereoCameraRecorder:
             return
 
         # Grab the latest frames captured asynchronously.
-        with self._lock:
-            frame_left = self._latest_left_frame
-            frame_right = self._latest_right_frame
+        with self._frame_lock:
+            jpeg_left = self._latest_left_jpeg
+            jpeg_right = self._latest_right_jpeg
             left_id = self._latest_left_id
             right_id = self._latest_right_id
             used_left = self._used_left_id
             used_right = self._used_right_id
 
-        if frame_left is None or frame_right is None:
+        if jpeg_left is None or jpeg_right is None:
             return
         # Skip if nothing new since last save to avoid duplicates.
         if left_id == used_left and right_id == used_right:
             return
-        with self._lock:
+        with self._frame_lock:
             self._used_left_id = left_id
             self._used_right_id = right_id
 
@@ -237,13 +262,13 @@ class StereoCameraRecorder:
         self._futures = pending
 
         # Use a monotonic 7-digit counter for filenames
-        with self._lock:
+        with self._frame_lock:
             self._frame_counter += 1
             frame_id = self._frame_counter
         fut = self._executor.submit(
             self._save_pair,
-            frame_left,
-            frame_right,
+            jpeg_left,
+            jpeg_right,
             frame_index,
             timestamp,
             frame_id,
@@ -362,8 +387,8 @@ class StereoCameraRecorder:
 
     def _save_pair(
         self,
-        frame_left,
-        frame_right,
+        jpeg_left: bytes,
+        jpeg_right: bytes,
         frame_index: int,
         timestamp: float,
         frame_id: int,
@@ -375,36 +400,43 @@ class StereoCameraRecorder:
         left_path = self.left_path / f"{filename}.jpg"
         right_path = self.right_path / f"{filename}.jpg"
 
-        self._save_jpeg(frame_left, left_path)
-        self._save_jpeg(frame_right, right_path)
+        self._write_bytes(jpeg_left, left_path)
+        self._write_bytes(jpeg_right, right_path)
 
-        # Record mapping in memory (timestamp in nanoseconds)
+        # Record mapping (timestamp in nanoseconds). Buffer writes to reduce I/O jitter.
         ts_ns = int(timestamp * 1_000_000_000)
-        with self._lock:
-            # Append metadata line to avoid holding the full mapping in memory.
-            if self._metadata_file is not None:
-                record = {"filename": f"{filename}.jpg", "timestamp_ns": ts_ns}
-                self._metadata_file.write(json.dumps(record))
-                self._metadata_file.write("\n")
-                # Rely on OS buffering; flushing each frame hurts throughput
+        record_line = json.dumps({"filename": f"{filename}.jpg", "timestamp_ns": ts_ns}) + "\n"
+        with self._meta_lock:
+            self._meta_records.append(record_line)
+            if self._metadata_file is not None and len(self._meta_records) >= self._metadata_flush_every:
+                try:
+                    self._metadata_file.write("".join(self._meta_records))
+                    self._meta_records.clear()
+                except OSError:
+                    # If disk hiccups, keep going; avoid blocking capture/control threads.
+                    self._meta_records.clear()
 
-    def _save_jpeg(self, frame_bgr, path: Path) -> None:
-        # Use OpenCV to encode/write JPEG directly to avoid Pillow conversions.
-        cv2.imwrite(str(path), frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    def _write_bytes(self, data: bytes, path: Path) -> None:
+        path.write_bytes(data)
 
     def _capture_loop(self, side: str, capture: Any) -> None:
-        """Continuously read from a capture and cache the latest frame."""
+        """Continuously read from a capture and cache the latest encoded JPEG."""
         next_id_attr = "_latest_left_id" if side == "left" else "_latest_right_id"
-        frame_attr = "_latest_left_frame" if side == "left" else "_latest_right_frame"
+        jpeg_attr = "_latest_left_jpeg" if side == "left" else "_latest_right_jpeg"
         while not self._stop_event.is_set():
             ret, frame = capture.read()
             if not ret or frame is None:
                 # Avoid tight spin if the camera hiccups.
                 self._stop_event.wait(0.005)
                 continue
-            with self._lock:
+
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+            if not ok:
+                continue
+            jpeg_bytes = buf.tobytes()
+            with self._frame_lock:
                 setattr(self, next_id_attr, getattr(self, next_id_attr) + 1)
-                setattr(self, frame_attr, frame)
+                setattr(self, jpeg_attr, jpeg_bytes)
 
 
 __all__ = ["StereoCameraRecorder"]

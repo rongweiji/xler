@@ -10,7 +10,7 @@ import threading
 import time
 import json
 import os
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, IO
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future, wait
 
@@ -215,22 +215,25 @@ class WebRecorder:
     """
 
     def __init__(self, output_root: Path, left_folder: str, right_folder: str,
-                 resolution: Tuple[int, int], fps: float) -> None:
+                 resolution: Tuple[int, int], fps: float,
+                 metadata_flush_every: int = 200) -> None:
         self.output_root = output_root
         self.left_folder = left_folder
         self.right_folder = right_folder
         self.resolution = resolution
         self.fps = float(fps)
+        self.metadata_flush_every = int(metadata_flush_every)
         self._workspace_path: Optional[Path] = None
-        self._metadata_file = None
+        self._metadata_file: Optional[IO[str]] = None
         self._frame_counter = 0
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._saved_count = 0
-        self._meta_records = []  # buffer metadata in memory for speed
+        self._meta_records: list[str] = []
         self._executor: Optional[ThreadPoolExecutor] = None
         self._futures: list[Future] = []
         self._lock = threading.Lock()
+        self._meta_lock = threading.Lock()
         self._max_pending_saves = 128
 
     def _next_frame_index(self, left_path: Path) -> int:
@@ -263,6 +266,7 @@ class WebRecorder:
         self.left_path.mkdir(parents=True, exist_ok=True)
         self.right_path.mkdir(parents=True, exist_ok=True)
         self._meta_path = self._workspace_path / "frames_time.json"
+        self._metadata_file = self._meta_path.open("a", encoding="utf-8", buffering=1024 * 1024)
         self._frame_counter = self._next_frame_index(self.left_path)
         self._saved_count = 0
         self._stop.clear()
@@ -311,20 +315,23 @@ class WebRecorder:
                     continue
                 if capture_ts_ns is not None and last_saved_ts_ns is not None and (capture_ts_ns - last_saved_ts_ns) < min_spacing_ns:
                     continue
-                # Save pair
-                self._frame_counter += 1
-                fid = f"{self._frame_counter:07d}"
+                # Save pair (compute id, but only commit if we actually enqueue a save)
+                next_counter = self._frame_counter + 1
+                fid = f"{next_counter:07d}"
                 ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
-                rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
+                meta_line = json.dumps({"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)})
 
-                def _save_pair(left_bytes: bytes, right_bytes: bytes, fname: str) -> None:
+                def _save_pair(left_bytes: bytes, right_bytes: bytes, fname: str, metadata_line: str) -> None:
                     try:
-                        with open(self.left_path / f"{fname}.jpg", "wb") as f:
-                            f.write(left_bytes)
-                        with open(self.right_path / f"{fname}.jpg", "wb") as f:
-                            f.write(right_bytes)
+                        (self.left_path / f"{fname}.jpg").write_bytes(left_bytes)
+                        (self.right_path / f"{fname}.jpg").write_bytes(right_bytes)
                         with self._lock:
                             self._saved_count += 2
+                        with self._meta_lock:
+                            self._meta_records.append(metadata_line)
+                            if self._metadata_file is not None and len(self._meta_records) >= self.metadata_flush_every:
+                                self._metadata_file.write("\n".join(self._meta_records) + "\n")
+                                self._meta_records.clear()
                     except Exception:
                         pass
 
@@ -334,13 +341,13 @@ class WebRecorder:
                     if len(pending) >= self._max_pending_saves:
                         self._futures = pending
                         continue
-                    fut = self._executor.submit(_save_pair, lj, rj, fid)
+                    self._frame_counter = next_counter
+                    fut = self._executor.submit(_save_pair, lj, rj, fid, meta_line)
                     pending.append(fut)
                     self._futures = pending
 
                 last_saved_frame_id = capture_frame_id if capture_frame_id is not None else last_saved_frame_id
                 last_saved_ts_ns = ts_ns
-                self._meta_records.append(rec)
 
         self._thread = threading.Thread(target=_loop, name="web_recorder", daemon=True)
         self._thread.start()
@@ -356,15 +363,20 @@ class WebRecorder:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
         self._futures = []
-        # Write buffered metadata on stop to minimize per-frame I/O
-        if self._meta_records and self._workspace_path is not None:
-            try:
-                with self._meta_path.open("w", encoding="utf-8") as f:
-                    for rec in self._meta_records:
-                        f.write(json.dumps(rec) + "\n")
-            except Exception:
-                pass
-        self._meta_records = []
+        # Flush buffered metadata on stop
+        with self._meta_lock:
+            if self._meta_records and self._metadata_file is not None:
+                try:
+                    self._metadata_file.write("\n".join(self._meta_records) + "\n")
+                except Exception:
+                    pass
+            self._meta_records = []
+            if self._metadata_file is not None:
+                try:
+                    self._metadata_file.close()
+                except Exception:
+                    pass
+                self._metadata_file = None
 
     def status(self) -> dict:
         return {
@@ -386,11 +398,13 @@ class CaptureSession:
     """
 
     def __init__(self, output_root: Path, session_folder: str,
-                 left_folder: str, right_folder: str) -> None:
+                 left_folder: str, right_folder: str,
+                 metadata_flush_every: int = 50) -> None:
         self.output_root = output_root
         self.session_folder = session_folder
         self.left_folder = left_folder
         self.right_folder = right_folder
+        self.metadata_flush_every = int(metadata_flush_every)
         self._workspace_path: Path = self.output_root / self.session_folder
         self._workspace_path.mkdir(parents=True, exist_ok=True)
         self.left_path = self._workspace_path / self.left_folder
@@ -398,7 +412,9 @@ class CaptureSession:
         self.left_path.mkdir(parents=True, exist_ok=True)
         self.right_path.mkdir(parents=True, exist_ok=True)
         self._meta_path = self._workspace_path / "frames_time.json"
-        self._metadata_file = self._meta_path.open("a", encoding="utf-8", buffering=1)
+        self._metadata_file = self._meta_path.open("a", encoding="utf-8", buffering=1024 * 1024)
+        self._meta_lock = threading.Lock()
+        self._meta_records: list[str] = []
         self._frame_counter = self._next_frame_index(self.left_path)
 
     def _next_frame_index(self, left_path: Path) -> int:
@@ -424,21 +440,34 @@ class CaptureSession:
         self._frame_counter += 1
         fid = f"{self._frame_counter:07d}"
         try:
-            with open(self.left_path / f"{fid}.jpg", "wb") as f:
-                f.write(lj)
-            with open(self.right_path / f"{fid}.jpg", "wb") as f:
-                f.write(rj)
+            (self.left_path / f"{fid}.jpg").write_bytes(lj)
+            (self.right_path / f"{fid}.jpg").write_bytes(rj)
             ts_ns = capture_ts_ns if capture_ts_ns is not None else time.time_ns()
             rec = {"filename": f"{fid}.jpg", "timestamp_ns": int(ts_ns)}
-            self._metadata_file.write(json.dumps(rec) + "\n")
-            try:
-                self._metadata_file.flush(); import os; os.fsync(self._metadata_file.fileno())
-            except Exception:
-                pass
+            meta_line = json.dumps(rec)
+            with self._meta_lock:
+                self._meta_records.append(meta_line)
+                if len(self._meta_records) >= self.metadata_flush_every:
+                    self._metadata_file.write("\n".join(self._meta_records) + "\n")
+                    self._meta_records.clear()
+
             return {"ok": True, "filename": f"{fid}.jpg", "timestamp_ns": rec["timestamp_ns"],
                     "workspace": str(self._workspace_path)}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def close(self) -> None:
+        with self._meta_lock:
+            if self._meta_records:
+                try:
+                    self._metadata_file.write("\n".join(self._meta_records) + "\n")
+                except Exception:
+                    pass
+                self._meta_records.clear()
+            try:
+                self._metadata_file.close()
+            except Exception:
+                pass
 
     def status(self) -> dict:
         return {
@@ -682,6 +711,16 @@ def main():
     try:
         app.run(host=args.host, port=args.port, threaded=True)
     finally:
+        try:
+            if recorder:
+                recorder.stop()
+        except Exception:
+            pass
+        try:
+            if capture_session:
+                capture_session.close()
+        except Exception:
+            pass
         left_reader.stop()
         right_reader.stop()
 
