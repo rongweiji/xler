@@ -158,6 +158,8 @@ def main():
     parser.add_argument("--camera-right", type=str, default=None, help="Right camera device path (e.g. /dev/video3)")
     parser.add_argument("--camera-output-dir", type=str, default=None, help="Root directory for captured images")
     parser.add_argument("--fps", type=float, default=None, help="Camera capture FPS (overrides xler.yaml camera.fps)")
+    parser.add_argument("--left-device", type=str, default=None, help="Alias for --camera-left")
+    parser.add_argument("--right-device", type=str, default=None, help="Alias for --camera-right")
     args = parser.parse_args()
 
     # Load configuration
@@ -223,8 +225,9 @@ def main():
     if record_cameras:
         left_cfg = camera_settings.get("left", {})
         right_cfg = camera_settings.get("right", {})
-        left_device = args.camera_left or left_cfg.get("device")
-        right_device = args.camera_right or right_cfg.get("device")
+        # CLI overrides: --camera-left/--camera-right or aliases --left-device/--right-device
+        left_device = args.camera_left or args.left_device or left_cfg.get("device")
+        right_device = args.camera_right or args.right_device or right_cfg.get("device")
         output_dir = args.camera_output_dir or camera_settings.get("output_dir", "recordings")
         left_folder = left_cfg.get("folder", "front_stereo_cam_left")
         right_folder = right_cfg.get("folder", "front_stereo_cam_right")
@@ -233,141 +236,24 @@ def main():
         fps = args.fps if args.fps is not None else camera_settings.get("fps", 30)
         pixel_format = camera_settings.get("pixel_format", "mjpeg")
 
-        # Auto-detect cameras if paths are missing or invalid. This helps when /dev/videoN order flips.
-        def _is_capture_node(dev: str) -> bool:
-            if not dev:
-                return False
-            if cv2 is None:
+        # Use configured/CLI devices directly; user must set the correct capture nodes (e.g., /dev/video1 and /dev/video3).
+        def _can_open(dev: str) -> bool:
+            if not dev or cv2 is None:
                 return False
             try:
-                cap = cv2.VideoCapture(dev, cv2.CAP_V4L2) if isinstance(dev, (int,)) or str(dev).startswith("/dev/video") else cv2.VideoCapture(dev)
+                cap = cv2.VideoCapture(dev, cv2.CAP_V4L2) if str(dev).startswith("/dev/video") else cv2.VideoCapture(dev)
                 ok, _ = cap.read()
                 cap.release()
                 return cap.isOpened() and ok
             except Exception:
                 return False
 
-        def _by_path_candidates() -> list[tuple[str, str, str]]:
-            """Return list of (symlink_path, base_key, capture_node_realpath) for USB cameras from /dev/v4l/by-path."""
-            results = []
-            for candidate in sorted(globlib.glob("/dev/v4l/by-path/*video-index*")):
-                # Skip non-USB (e.g., CSI/ISP) to avoid probing many inactive nodes.
-                if "usb-" not in candidate:
-                    continue
-                real = os.path.realpath(candidate)
-                base_key = candidate.rsplit("-video-index", 1)[0]
-                if _is_capture_node(real):
-                    results.append((candidate, base_key, real))
-            return results
-
-        def _v4l2_list_devices_by_usb_hint(usb_hint: str | None) -> list[str]:
-            """Use `v4l2-ctl --list-devices` to find /dev/video* under a given USB path hint."""
-            if not usb_hint:
-                return []
-            try:
-                import subprocess
-
-                out = subprocess.check_output(["v4l2-ctl", "--list-devices"], text=True, stderr=subprocess.DEVNULL)
-            except Exception:
-                return []
-            lines = out.splitlines()
-            devices: list[str] = []
-            current_block_matches = False
-            for line in lines:
-                if line and not line.startswith("\t") and not line.startswith(" "):
-                    # New block header
-                    current_block_matches = usb_hint in line
-                    continue
-                if current_block_matches and line.strip().startswith("/dev/video"):
-                    dev = line.strip()
-                    if _is_capture_node(dev):
-                        devices.append(dev)
-            return devices
-
-        def _auto_detect_pair(left_hint: str | None, right_hint: str | None) -> tuple[str | None, str | None]:
-            # If hints exist, try those paths only (index0 then index1) to avoid probing everything.
-            candidates = _by_path_candidates()
-            left_candidate = None
-            right_candidate = None
-            if left_hint:
-                for symlink, _, real in candidates:
-                    if left_hint in symlink:
-                        left_candidate = real
-                        break
-                if left_candidate is None:
-                    # Try v4l2-ctl listing
-                    vlist = _v4l2_list_devices_by_usb_hint(left_hint)
-                    if vlist:
-                        left_candidate = vlist[0]
-            if right_hint:
-                for symlink, _, real in candidates:
-                    if right_hint in symlink:
-                        right_candidate = real
-                        break
-                if right_candidate is None:
-                    vlist = _v4l2_list_devices_by_usb_hint(right_hint)
-                    if vlist:
-                        right_candidate = vlist[0]
-            if left_candidate and right_candidate:
-                return left_candidate, right_candidate
-
-            # Otherwise, try unique capture nodes from by-path (dedup by base_key).
-            if candidates:
-                chosen = {}
-                for _, base, real in candidates:
-                    if base not in chosen:
-                        chosen[base] = real
-                usable = list(chosen.values())
-                if len(usable) >= 2:
-                    return usable[0], usable[1]
-
-            # Fallback: probe a small range of /dev/video nodes and pick first two that work.
-            usable = []
-            for i in range(0, 6):
-                dev = f"/dev/video{i}"
-                if _is_capture_node(dev):
-                    usable.append(dev)
-                if len(usable) >= 2:
-                    break
-            if len(usable) >= 2:
-                return usable[0], usable[1]
-            return None, None
-
-        # Optional USB path hints from YAML to lock left/right to specific ports.
-        left_path_hint = left_cfg.get("by_path") or left_cfg.get("usb_path")
-        right_path_hint = right_cfg.get("by_path") or right_cfg.get("usb_path")
-        if (not left_device or not _is_capture_node(left_device)) and left_path_hint:
-            for symlink, _, real in _by_path_candidates():
-                if left_path_hint in symlink:
-                    left_device = real
-                    logger.info("Auto-selected left camera from path hint %s -> %s", left_path_hint, real)
-                    break
-        if (not right_device or not _is_capture_node(right_device)) and right_path_hint:
-            for symlink, _, real in _by_path_candidates():
-                if right_path_hint in symlink:
-                    right_device = real
-                    logger.info("Auto-selected right camera from path hint %s -> %s", right_path_hint, real)
-                    break
-
-        # Validate provided devices; if not usable, auto-detect.
-        if not (_is_capture_node(left_device) and _is_capture_node(right_device)):
-            auto_left, auto_right = _auto_detect_pair(left_path_hint, right_path_hint)
-            if auto_left and auto_right:
-                logger.warning(
-                    "Auto-selected cameras: left=%s right=%s (previous left=%s right=%s)",
-                    auto_left,
-                    auto_right,
-                    left_device,
-                    right_device,
-                )
-                left_device, right_device = auto_left, auto_right
-            else:
-                logger.error("Could not auto-detect two usable camera nodes. Check connections.")
-                record_cameras = False
-
         if not left_device or not right_device:
             logger.error("Camera recording requested but device paths are missing. "
                          "Check xler.yaml or provide --camera-left/--camera-right.")
+            record_cameras = False
+        elif not (_can_open(left_device) and _can_open(right_device)):
+            logger.error("Camera devices did not open/read. Set capture nodes explicitly (e.g., /dev/video1 and /dev/video3).")
             record_cameras = False
         else:
             try:

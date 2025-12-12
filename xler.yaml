@@ -20,10 +20,8 @@ camera:
   fps: 10                     # Frame rate to request from camera
   pixel_format: mjpeg         # mjpeg, yuyv, etc.
   left:
-    device: /dev/video0
-    usb_path: usb-3f980000.usb-1.1.2.1  # optional stable USB path hint (index0 under this path) by check `v4l2-ctl --list-devices`
+    device: /dev/video1
     folder: front_stereo_cam_left
   right:
-    device: /dev/video2
-    usb_path: usb-3f980000.usb-1.1.2.2  # optional stable USB path hint (index0 under this path)
+    device: /dev/video3
     folder: front_stereo_cam_right
