@@ -30,14 +30,19 @@ import logging
 import sys
 import threading
 import time
-import glob
 import platform
+import glob as globlib
+import os
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import yaml
+try:
+    import cv2  # type: ignore
+except Exception:
+    cv2 = None  # type: ignore
 
 # Import from motors2 (self-contained package)
 from motors2 import Motor, MotorNormMode, find_serial_port
@@ -227,6 +232,85 @@ def main():
         # CLI --fps overrides YAML camera.fps when provided
         fps = args.fps if args.fps is not None else camera_settings.get("fps", 30)
         pixel_format = camera_settings.get("pixel_format", "mjpeg")
+
+        # Auto-detect cameras if paths are missing or invalid. This helps when /dev/videoN order flips.
+        def _is_capture_node(dev: str) -> bool:
+            if not dev:
+                return False
+            if cv2 is None:
+                return False
+            try:
+                cap = cv2.VideoCapture(dev, cv2.CAP_V4L2) if isinstance(dev, (int,)) or str(dev).startswith("/dev/video") else cv2.VideoCapture(dev)
+                ok, _ = cap.read()
+                cap.release()
+                return cap.isOpened() and ok
+            except Exception:
+                return False
+
+        def _pick_from_by_path(path_hint: str) -> str | None:
+            """Choose a capture node under a given USB path hint (index0 preferred)."""
+            if not path_hint:
+                return None
+            patterns = [
+                f"/dev/v4l/by-path/*{path_hint}*index0",
+                f"/dev/v4l/by-path/*{path_hint}*index1",
+            ]
+            for pat in patterns:
+                for candidate in sorted(globlib.glob(pat)):
+                    real = os.path.realpath(candidate)
+                    if _is_capture_node(real):
+                        return real
+            return None
+
+        def _auto_detect_pair() -> tuple[str | None, str | None]:
+            # Prefer stable by-id symlinks ending with index0/index1.
+            by_id = sorted(globlib.glob("/dev/v4l/by-id/*index0"))
+            if len(by_id) >= 2:
+                cand = [(p, os.path.realpath(p)) for p in by_id]
+                usable = [p for p, real in cand if _is_capture_node(real)]
+                if len(usable) >= 2:
+                    return usable[0], usable[1]
+            # Fallback: probe /dev/video0-5 and pick first two that open & read.
+            usable = []
+            for i in range(0, 6):
+                dev = f"/dev/video{i}"
+                if _is_capture_node(dev):
+                    usable.append(dev)
+                if len(usable) >= 2:
+                    break
+            if len(usable) >= 2:
+                return usable[0], usable[1]
+            return None, None
+
+        # Optional USB path hints from YAML to lock left/right to specific ports.
+        left_path_hint = left_cfg.get("by_path") or left_cfg.get("usb_path")
+        right_path_hint = right_cfg.get("by_path") or right_cfg.get("usb_path")
+        if (not left_device or not _is_capture_node(left_device)) and left_path_hint:
+            detected = _pick_from_by_path(left_path_hint)
+            if detected:
+                logger.info("Auto-selected left camera from path hint %s -> %s", left_path_hint, detected)
+                left_device = detected
+        if (not right_device or not _is_capture_node(right_device)) and right_path_hint:
+            detected = _pick_from_by_path(right_path_hint)
+            if detected:
+                logger.info("Auto-selected right camera from path hint %s -> %s", right_path_hint, detected)
+                right_device = detected
+
+        # Validate provided devices; if not usable, auto-detect.
+        if not (_is_capture_node(left_device) and _is_capture_node(right_device)):
+            auto_left, auto_right = _auto_detect_pair()
+            if auto_left and auto_right:
+                logger.warning(
+                    "Auto-selected cameras: left=%s right=%s (previous left=%s right=%s)",
+                    auto_left,
+                    auto_right,
+                    left_device,
+                    right_device,
+                )
+                left_device, right_device = auto_left, auto_right
+            else:
+                logger.error("Could not auto-detect two usable camera nodes. Check connections.")
+                record_cameras = False
 
         if not left_device or not right_device:
             logger.error("Camera recording requested but device paths are missing. "
