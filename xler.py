@@ -266,7 +266,6 @@ def main():
                     left_device,
                     right_device,
                 )
-        else:
             try:
                 recorder = StereoCameraRecorder(
                     left_device=left_device,
