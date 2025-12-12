@@ -20,8 +20,8 @@ camera:
   fps: 10                     # Frame rate to request from camera
   pixel_format: mjpeg         # mjpeg, yuyv, etc.
   left:
-    device: /dev/video1
+    device: /dev/video0
     folder: front_stereo_cam_left
   right:
-    device: /dev/video3
+    device: /dev/video2
     folder: front_stereo_cam_right
