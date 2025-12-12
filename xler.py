@@ -248,9 +248,12 @@ def main():
                 return False
 
         def _by_path_candidates() -> list[tuple[str, str, str]]:
-            """Return list of (symlink_path, base_key, capture_node_realpath) from /dev/v4l/by-path."""
+            """Return list of (symlink_path, base_key, capture_node_realpath) for USB cameras from /dev/v4l/by-path."""
             results = []
             for candidate in sorted(globlib.glob("/dev/v4l/by-path/*video-index*")):
+                # Skip non-USB (e.g., CSI/ISP) to avoid probing many inactive nodes.
+                if "usb-" not in candidate:
+                    continue
                 real = os.path.realpath(candidate)
                 base_key = candidate.rsplit("-video-index", 1)[0]
                 if _is_capture_node(real):
