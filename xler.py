@@ -244,6 +244,12 @@ def main():
                 cap = cv2.VideoCapture(dev, cv2.CAP_V4L2) if str(dev).startswith("/dev/video") else cv2.VideoCapture(dev)
                 ok, _ = cap.read()
                 cap.release()
+                if cap.isOpened() and ok:
+                    return True
+                # Retry with default backend if V4L2 first attempt failed.
+                cap = cv2.VideoCapture(dev)
+                ok, _ = cap.read()
+                cap.release()
                 return cap.isOpened() and ok
             except Exception:
                 return False
@@ -252,9 +258,14 @@ def main():
             logger.error("Camera recording requested but device paths are missing. "
                          "Check xler.yaml or provide --camera-left/--camera-right.")
             record_cameras = False
-        elif not (_can_open(left_device) and _can_open(right_device)):
-            logger.error("Camera devices did not open/read. Set capture nodes explicitly (e.g., /dev/video1 and /dev/video3).")
-            record_cameras = False
+        else:
+            if not (_can_open(left_device) and _can_open(right_device)):
+                logger.warning(
+                    "Camera devices did not open on first probe; proceeding with configured nodes left=%s right=%s. "
+                    "If capture fails, set working nodes explicitly (e.g., /dev/video1 and /dev/video3).",
+                    left_device,
+                    right_device,
+                )
         else:
             try:
                 recorder = StereoCameraRecorder(
