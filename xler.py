@@ -247,14 +247,14 @@ def main():
             except Exception:
                 return False
 
-        def _by_path_candidates() -> list[tuple[str, str]]:
-            """Return list of (base_key, capture_node_realpath) from /dev/v4l/by-path."""
+        def _by_path_candidates() -> list[tuple[str, str, str]]:
+            """Return list of (symlink_path, base_key, capture_node_realpath) from /dev/v4l/by-path."""
             results = []
             for candidate in sorted(globlib.glob("/dev/v4l/by-path/*video-index*")):
                 real = os.path.realpath(candidate)
                 base_key = candidate.rsplit("-video-index", 1)[0]
                 if _is_capture_node(real):
-                    results.append((base_key, real))
+                    results.append((candidate, base_key, real))
             return results
 
         def _auto_detect_pair() -> tuple[str | None, str | None]:
@@ -263,7 +263,7 @@ def main():
             if candidates:
                 # Deduplicate by base_key, prefer index0 vs index1 naturally by sort order.
                 chosen = {}
-                for base, real in candidates:
+                for _, base, real in candidates:
                     if base not in chosen:
                         chosen[base] = real
                 usable = list(chosen.values())
@@ -285,14 +285,14 @@ def main():
         left_path_hint = left_cfg.get("by_path") or left_cfg.get("usb_path")
         right_path_hint = right_cfg.get("by_path") or right_cfg.get("usb_path")
         if (not left_device or not _is_capture_node(left_device)) and left_path_hint:
-            for _, real in _by_path_candidates():
-                if left_path_hint in real:
+            for symlink, _, real in _by_path_candidates():
+                if left_path_hint in symlink:
                     left_device = real
                     logger.info("Auto-selected left camera from path hint %s -> %s", left_path_hint, real)
                     break
         if (not right_device or not _is_capture_node(right_device)) and right_path_hint:
-            for _, real in _by_path_candidates():
-                if right_path_hint in real:
+            for symlink, _, real in _by_path_candidates():
+                if right_path_hint in symlink:
                     right_device = real
                     logger.info("Auto-selected right camera from path hint %s -> %s", right_path_hint, real)
                     break
