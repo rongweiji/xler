@@ -260,6 +260,30 @@ def main():
                     results.append((candidate, base_key, real))
             return results
 
+        def _v4l2_list_devices_by_usb_hint(usb_hint: str | None) -> list[str]:
+            """Use `v4l2-ctl --list-devices` to find /dev/video* under a given USB path hint."""
+            if not usb_hint:
+                return []
+            try:
+                import subprocess
+
+                out = subprocess.check_output(["v4l2-ctl", "--list-devices"], text=True, stderr=subprocess.DEVNULL)
+            except Exception:
+                return []
+            lines = out.splitlines()
+            devices: list[str] = []
+            current_block_matches = False
+            for line in lines:
+                if line and not line.startswith("\t") and not line.startswith(" "):
+                    # New block header
+                    current_block_matches = usb_hint in line
+                    continue
+                if current_block_matches and line.strip().startswith("/dev/video"):
+                    dev = line.strip()
+                    if _is_capture_node(dev):
+                        devices.append(dev)
+            return devices
+
         def _auto_detect_pair(left_hint: str | None, right_hint: str | None) -> tuple[str | None, str | None]:
             # If hints exist, try those paths only (index0 then index1) to avoid probing everything.
             candidates = _by_path_candidates()
@@ -270,11 +294,20 @@ def main():
                     if left_hint in symlink:
                         left_candidate = real
                         break
+                if left_candidate is None:
+                    # Try v4l2-ctl listing
+                    vlist = _v4l2_list_devices_by_usb_hint(left_hint)
+                    if vlist:
+                        left_candidate = vlist[0]
             if right_hint:
                 for symlink, _, real in candidates:
                     if right_hint in symlink:
                         right_candidate = real
                         break
+                if right_candidate is None:
+                    vlist = _v4l2_list_devices_by_usb_hint(right_hint)
+                    if vlist:
+                        right_candidate = vlist[0]
             if left_candidate and right_candidate:
                 return left_candidate, right_candidate
 
