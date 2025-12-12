@@ -247,32 +247,31 @@ def main():
             except Exception:
                 return False
 
-        def _pick_from_by_path(path_hint: str) -> str | None:
-            """Choose a capture node under a given USB path hint (index0 preferred)."""
-            if not path_hint:
-                return None
-            patterns = [
-                f"/dev/v4l/by-path/*{path_hint}*index0",
-                f"/dev/v4l/by-path/*{path_hint}*index1",
-            ]
-            for pat in patterns:
-                for candidate in sorted(globlib.glob(pat)):
-                    real = os.path.realpath(candidate)
-                    if _is_capture_node(real):
-                        return real
-            return None
+        def _by_path_candidates() -> list[tuple[str, str]]:
+            """Return list of (base_key, capture_node_realpath) from /dev/v4l/by-path."""
+            results = []
+            for candidate in sorted(globlib.glob("/dev/v4l/by-path/*video-index*")):
+                real = os.path.realpath(candidate)
+                base_key = candidate.rsplit("-video-index", 1)[0]
+                if _is_capture_node(real):
+                    results.append((base_key, real))
+            return results
 
         def _auto_detect_pair() -> tuple[str | None, str | None]:
-            # Prefer stable by-id symlinks ending with index0/index1.
-            by_id = sorted(globlib.glob("/dev/v4l/by-id/*index0"))
-            if len(by_id) >= 2:
-                cand = [(p, os.path.realpath(p)) for p in by_id]
-                usable = [p for p, real in cand if _is_capture_node(real)]
+            # Prefer by-path index nodes grouped by physical port.
+            candidates = _by_path_candidates()
+            if candidates:
+                # Deduplicate by base_key, prefer index0 vs index1 naturally by sort order.
+                chosen = {}
+                for base, real in candidates:
+                    if base not in chosen:
+                        chosen[base] = real
+                usable = list(chosen.values())
                 if len(usable) >= 2:
                     return usable[0], usable[1]
-            # Fallback: probe /dev/video0-5 and pick first two that open & read.
+            # Fallback: probe /dev/video0-9 and pick first two that open & read.
             usable = []
-            for i in range(0, 6):
+            for i in range(0, 10):
                 dev = f"/dev/video{i}"
                 if _is_capture_node(dev):
                     usable.append(dev)
@@ -286,15 +285,17 @@ def main():
         left_path_hint = left_cfg.get("by_path") or left_cfg.get("usb_path")
         right_path_hint = right_cfg.get("by_path") or right_cfg.get("usb_path")
         if (not left_device or not _is_capture_node(left_device)) and left_path_hint:
-            detected = _pick_from_by_path(left_path_hint)
-            if detected:
-                logger.info("Auto-selected left camera from path hint %s -> %s", left_path_hint, detected)
-                left_device = detected
+            for _, real in _by_path_candidates():
+                if left_path_hint in real:
+                    left_device = real
+                    logger.info("Auto-selected left camera from path hint %s -> %s", left_path_hint, real)
+                    break
         if (not right_device or not _is_capture_node(right_device)) and right_path_hint:
-            detected = _pick_from_by_path(right_path_hint)
-            if detected:
-                logger.info("Auto-selected right camera from path hint %s -> %s", right_path_hint, detected)
-                right_device = detected
+            for _, real in _by_path_candidates():
+                if right_path_hint in real:
+                    right_device = real
+                    logger.info("Auto-selected right camera from path hint %s -> %s", right_path_hint, real)
+                    break
 
         # Validate provided devices; if not usable, auto-detect.
         if not (_is_capture_node(left_device) and _is_capture_node(right_device)):
