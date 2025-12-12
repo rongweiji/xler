@@ -257,11 +257,26 @@ def main():
                     results.append((candidate, base_key, real))
             return results
 
-        def _auto_detect_pair() -> tuple[str | None, str | None]:
-            # Prefer by-path index nodes grouped by physical port.
+        def _auto_detect_pair(left_hint: str | None, right_hint: str | None) -> tuple[str | None, str | None]:
+            # If hints exist, try those paths only (index0 then index1) to avoid probing everything.
             candidates = _by_path_candidates()
+            left_candidate = None
+            right_candidate = None
+            if left_hint:
+                for symlink, _, real in candidates:
+                    if left_hint in symlink:
+                        left_candidate = real
+                        break
+            if right_hint:
+                for symlink, _, real in candidates:
+                    if right_hint in symlink:
+                        right_candidate = real
+                        break
+            if left_candidate and right_candidate:
+                return left_candidate, right_candidate
+
+            # Otherwise, try unique capture nodes from by-path (dedup by base_key).
             if candidates:
-                # Deduplicate by base_key, prefer index0 vs index1 naturally by sort order.
                 chosen = {}
                 for _, base, real in candidates:
                     if base not in chosen:
@@ -269,9 +284,10 @@ def main():
                 usable = list(chosen.values())
                 if len(usable) >= 2:
                     return usable[0], usable[1]
-            # Fallback: probe /dev/video0-9 and pick first two that open & read.
+
+            # Fallback: probe a small range of /dev/video nodes and pick first two that work.
             usable = []
-            for i in range(0, 10):
+            for i in range(0, 6):
                 dev = f"/dev/video{i}"
                 if _is_capture_node(dev):
                     usable.append(dev)
@@ -299,7 +315,7 @@ def main():
 
         # Validate provided devices; if not usable, auto-detect.
         if not (_is_capture_node(left_device) and _is_capture_node(right_device)):
-            auto_left, auto_right = _auto_detect_pair()
+            auto_left, auto_right = _auto_detect_pair(left_path_hint, right_path_hint)
             if auto_left and auto_right:
                 logger.warning(
                     "Auto-selected cameras: left=%s right=%s (previous left=%s right=%s)",
